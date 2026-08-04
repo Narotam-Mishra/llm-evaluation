@@ -678,7 +678,211 @@ class RAGApplicationEvaluator:
 
 ---
 
-## 03. 
+## 03. How to Evaluate LLM Applications: The Complete Workflow (16:59)
 
+## 🔄 Part 1: Quick Recap (From Videos 1 & 2)
+
+Before starting the workflow, here is the recap:
+
+1. **Why?** To avoid legal trouble, reputation damage, and expensive fines (Air Canada, Chevrolet, Lawyer cases).
+2. **What?** Systematic, repeatable tests against clear criteria (not just random "vibe" testing).
+3. **Types:**
+   - **Model Evals**: Testing the raw base LLM (Done by OpenAI/Google). You just read these to pick a model.
+   - **Application Evals**: Testing YOUR entire system (The AI Engineer's main job). **This is our focus.**
+
+---
+
+## 📧 Part 2: The Scenario (The Setup)
+
+**You are an AI Engineer at Zomato.**
+
+- **Problem**: Zomato gets thousands of customer emails daily. Manual replies are hard.
+- **Your Goal**: Build a system that automatically reads an email, **classifies** it, and routes it to the correct internal team.
+- **Categories (Labels)**:
+  - `Billing` → Route to the Billing Team.
+  - `Technical` → Route to the Tech Team.
+  - `General` → Route to General Support.
+- **The System**: It's just an LLM + a System Prompt telling the LLM to classify.
+
+---
+
+## 🛠️ Part 3: The 9-Step Application Evaluation Workflow
+
+Here is the exact step-by-step process you will follow for *every* LLM app you build.
+
+### Step 1: Define the Task and Target
+Clearly state *what* you are testing.
+- **Target**: The entire email routing system.
+- **Task**: We need to evaluate if this system correctly classifies emails.
+
+### Step 2: Define Success Criteria and Metrics
+How do we know if the system is "good"?
+- **Success Criteria**: Correct classification.
+- **Metric**: **Accuracy** (e.g., out of 100 emails, how many did it route correctly?).
+
+### Step 3: Build a "Golden" Evaluation Dataset
+Create a test dataset with expected results (manually labeled by humans).
+- You take past real emails from Zomato.
+- You manually label them as `Billing`, `Technical`, or `General`.
+- This is called a **Golden Dataset** (The "Answer Key" for your test).
+
+### Step 4: Choose an Evaluation Method
+Who will compare the LLM's answers to the Golden Dataset?
+- **Option A: Automated (Code)** – Best for exact classification (like this case). Just write a Python script to compare labels.
+- **Option B: Human** – Expensive. Use for subjective tasks (e.g., "Does this response sound empathetic?").
+- **Option C: LLM-as-a-Judge** – Use a stronger LLM (e.g., GPT-4) to judge weaker models. Good for comparing long paragraphs where meaning is subjective.
+
+### Step 5: Run the Model on the Dataset
+Feed your Golden Dataset into your LLM system and let it generate predictions.
+
+### Step 6: Evaluate & Analyze Results
+Calculate the accuracy. Let’s say the result is **80%** (It misclassified 20 out of 100 emails). 
+**Critical Step**: You don't just look at the number. You analyze *why* it failed. Is it confusing "Billing" with "Technical" often?
+
+### Step 7: Improve the System (Optimization)
+Based on the analysis, you improve the system:
+- **Fix 1**: Tweak the System Prompt (add clearer definitions or examples).
+- **Fix 2**: Upgrade to a better/smarter base LLM (if the current one is too dumb).
+
+### Step 8: Iterative Evaluation Loop
+You re-run the *exact same Golden Dataset* on the improved system.
+- Version 1 scored 80%.
+- You tweak the prompt → Re-run → Now it scores **90%**.
+- You upgrade the model → Re-run → Now it scores **95%**.
+- Loop continues until you are happy with the score.
+
+### Step 9: Deploy & Production Monitoring
+You deploy the system online. 
+- **Monitoring**: Watch what happens in production.
+- **Catching Failures**: A user complained to the Tech team, but it should have gone to Billing. The Tech team flags this mistake.
+- **Feedback Loop**: You take that *specific failed email*, add it to your Golden Dataset, and run the evaluation loop again. 
+- **Result**: Your dataset gets richer over time, and the system keeps improving forever.
+
+---
+
+## 💻 Code Examples for the Workflow
+
+### 1. Building a Golden Dataset (Step 3)
+```python
+# This is your "Answer Key" (Golden Dataset)
+golden_dataset = [
+    {
+        "email_text": "My credit card was charged twice this month.",
+        "expected_label": "Billing"
+    },
+    {
+        "email_text": "The app crashes every time I try to log in.",
+        "expected_label": "Technical"
+    },
+    {
+        "email_text": "What are your restaurant operating hours?",
+        "expected_label": "General"
+    }
+]
+# In reality, you will have 100 to 500 of these examples.
+```
+
+### 2. Automated Evaluation Method (Step 4 & 6)
+```python
+# This function acts as our "Automated Evaluator"
+def calculate_accuracy(system_predictions, expected_labels):
+    correct = 0
+    total = len(expected_labels)
+    
+    for i in range(total):
+        if system_predictions[i] == expected_labels[i]:
+            correct += 1
+            
+    accuracy = (correct / total) * 100
+    return accuracy
+
+# Simulating Version 1 (80% accurate - 2 out of 10 wrong)
+predictions_v1 = ["Billing", "General", "Billing"] # Let's say 3 examples, 2 correct
+expected = ["Billing", "Technical", "Billing"] 
+score = calculate_accuracy(predictions_v1, expected)
+print(f"Version 1 Accuracy: {score}%") # Output: Version 1 Accuracy: 66.6% (if 2/3)
+```
+
+### 3. Iterative Improvement Loop (Step 7 & 8)
+```python
+# Simulating the iterative loop
+
+def run_evaluation(dataset, llm_version):
+    predictions = []
+    for item in dataset:
+        # In reality, you call your LLM API here with the prompt
+        prediction = llm_version.classify(item["email_text"])
+        predictions.append(prediction)
+    
+    # Compare predictions to dataset's "expected_label"
+    return calculate_accuracy(predictions, [d["expected_label"] for d in dataset])
+
+# Simulate Version 1 (Small, cheap model)
+v1_accuracy = 80.0 
+
+# You analyze failures, tweak the prompt (Version 1.1)
+v1_1_accuracy = 88.0 
+
+# You upgrade to GPT-4 (Version 2)
+v2_accuracy = 95.0 
+
+print(f"Prompt Tweaking: {v1_1_accuracy}%")
+print(f"Model Upgrade: {v2_accuracy}%")
+```
+
+### 4. Production Feedback Loop (Step 9)
+```python
+# A failure happens in production
+production_failure = {
+    "email_text": "I didn't get my refund yet.",
+    "actual_label": "Billing", # What it should have been
+    "system_predicted": "General" # What the system wrongly gave
+}
+
+# You ADD this failure to your Golden Dataset for the next evaluation cycle
+golden_dataset.append({
+    "email_text": production_failure["email_text"],
+    "expected_label": production_failure["actual_label"]
+})
+
+# Now next time you run the eval, the dataset is larger and catches more edge cases.
+```
+
+---
+
+## ⚠️ Crucial Point: Multiple Evaluations per Application
+
+The instructor emphasizes that **one application has MULTIPLE evaluations**, not just one.
+
+For example, if you built a **RAG (Retrieval-Augmented Generation)** Chatbot, you would run:
+
+| Evaluation Type | What it tests | Purpose |
+| :--- | :--- | :--- |
+| **Retriever Eval** | Does it fetch the correct documents? | To ensure the search engine works. |
+| **Embedding Eval** | Is the embedding model capturing meaning? | To ensure vector search is accurate. |
+| **Full Flow Eval** | Is the final LLM answer good? | To check hallucinations and coherence. |
+| **Latency Eval** | How fast is the entire system? | To track operational performance and cost. |
+
+---
+
+## 📝 Final Summary Table (The Workflow)
+
+| Step | Action | Example for this Email Classifier |
+| :--- | :--- | :--- |
+| **1** | Define Task | Evaluate the email routing system. |
+| **2** | Define Metric | Accuracy score (%). |
+| **3** | Golden Dataset | 100 real emails manually labeled as Billing/Tech/General. |
+| **4** | Eval Method | Automated (Python code comparing strings). |
+| **5** | Run System | Feed the 100 emails to the LLM. |
+| **6** | Evaluate/Analyze | Accuracy is 80%. Figure out it's confusing similar texts. |
+| **7** | Improve System | Edit the System Prompt to explain differences better. |
+| **8** | Iterate | Re-run the same dataset → Accuracy jumps to 90%. |
+| **9** | Deploy/Monitor | Put live. If users complain about wrong routing, add those emails back to the dataset and restart from Step 5. |
+
+**Bottom Line**: Building an LLM app is easy (takes 5-10 minutes). Building a **production-ready, reliable LLM app** requires this strict, never-ending evaluation loop. 🚀
+
+---
+
+## 04. 
 
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
