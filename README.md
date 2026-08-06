@@ -883,6 +883,201 @@ For example, if you built a **RAG (Retrieval-Augmented Generation)** Chatbot, yo
 
 ---
 
-## 04. 
+## 04. Why Your AI Application Needs Multiple Eval Pipelines? (28:05)
+
+This lecture focus on a crucial practical question: *"If I build one LLM application, why do I need to write multiple different evaluation pipelines instead of just one?"*
+
+There are **two major reasons**: **Multiple Failure Points** (components break individually or together) and **Multiple Risk Categories** (quality, safety, and operations). 
+
+---
+
+## 🧩 Reason 1: Multiple Failure Points (Component vs. Workflow)
+
+An LLM application is not a single black box. It has multiple components. If Component A works and Component B works, **the whole system can still fail** because of how they interact.
+
+### The RAG (Retrieval-Augmented Generation) Example
+
+- **Components**:
+  1. **Retriever**: Searches a Vector DB for relevant documents.
+  2. **Generator (LLM)**: Reads the retrieved documents and answers the user.
+
+#### The "K=5" Trap Scenario
+- **User Question**: *"What is the duration of the ML course?"*
+- **Retriever Setting**: `K=5` (fetches the top 5 documents).
+- **Documents Fetched**:
+  - Doc 1: Random info.
+  - Doc 2: Random info.
+  - Doc 3: Random info.
+  - Doc 4: "The Python course duration is 6 weeks." (Irrelevant to ML).
+  - Doc 5: **"The ML course duration is 8 weeks."** (Correct answer).
+
+**Evaluation Check 1 (Retriever Eval)**: ✅ **PASS**. Why? Because the Retriever's job was to fetch 5 documents where *at least 1* is relevant. It found Doc 5. Good retriever.
+
+**Evaluation Check 2 (Generator Eval)**: ✅ **PASS**. Why? The Generator is programmed to prioritize the *top-ranked* documents (Doc 1, 2, 3, 4) over lower ones. It sees "6 weeks" in Doc 4 and ignores Doc 5. It follows instructions perfectly.
+
+**Actual System Output**: ❌ **"The ML course duration is 6 weeks."** (Wrong answer!).
+
+**Conclusion**: Both components worked perfectly individually, but the **Workflow/Integration** failed because the correct document was buried at the bottom. 
+
+**Solution**: You need a **Workflow-level Eval** that tests the Retriever + Generator *together*. It would catch this error and tell you to add a **Reranker** (which moves Doc 5 to the top).
+
+---
+
+### 💻 Code Example: Simulating the Component vs. Workflow Failure
+
+```python
+# Simulating the RAG components
+
+class Retriever:
+    def fetch(self, query, k=5):
+        # Simulates fetching 5 docs. Correct answer is at index 4 (last).
+        return ["Doc1_Random", "Doc2_Random", "Doc3_Random", "Doc4_Python_6weeks", "Doc5_ML_8weeks"]
+
+class Generator:
+    def generate(self, query, documents):
+        # BAD LOGIC: Always picks the FIRST document (index 0) as the source of truth.
+        # This is a "workflow" issue, not a component issue.
+        first_doc = documents[0] 
+        if "6weeks" in first_doc:
+            return "6 weeks"
+        elif "8weeks" in first_doc:
+            return "8 weeks"
+        return "Unknown"
+
+# --- Running Individual Component Evals ---
+retriever = Retriever()
+docs = retriever.fetch("ML course duration")
+
+# Component Eval 1: Retriever Test (Does it contain the right doc?)
+assert "Doc5_ML_8weeks" in docs, "Retriever Failed!"  # ✅ PASS (it is in there)
+
+# Component Eval 2: Generator Test (Does it hallucinate?)
+generator = Generator()
+response = generator.generate("ML course duration", docs)
+# The generator DID NOT hallucinate. It used what it saw in the first doc.
+print(f"Generator Output: {response}")  # Output: 6 weeks
+
+# --- WORKFLOW-LEVEL EVAL (Testing them together) ---
+# This eval runs the FULL pipeline and checks the FINAL answer.
+expected_answer = "8 weeks"
+if response != expected_answer:
+    print(f"❌ WORKFLOW FAILED! Expected '{expected_answer}', got '{response}'.")
+    print("💡 Fix: Add a Reranker to prioritize Doc5 before sending to Generator.")
+# Output: ❌ WORKFLOW FAILED! Expected '8 weeks', got '6 weeks'.
+```
+
+---
+
+### The 3 Levels Where Failures Happen
+Even if you fix the Workflow, you still need a third level.
+
+| Level | What Breaks | Example | Eval Needed |
+| :--- | :--- | :--- | :--- |
+| **1. Component** | Individual pieces | Retriever fetches garbage / Generator hallucinates. | Component-specific Eval. |
+| **2. Workflow** | Interaction between pieces | Correct doc is buried, logic prioritizes wrong docs. | Integration/Flow Eval. |
+| **3. Application** | Overall system performance | The pipeline returns the *correct* answer, but takes **10 seconds** to reply. | Operational/Latency Eval. |
+
+---
+
+## ⚠️ Reason 2: Multiple Risk Categories (Quality, Safety, Ops)
+
+Even if your system is technically "correct", it can still fail in different **dimensions**. 
+
+The instructor splits all risks into **3 Main Pillars**. You need a separate eval pipeline for each pillar.
+
+1. **Application Quality**: "Does it do the actual job well?"
+   - Correctness, Relevance, Completeness, Groundedness/Faithfulness, Instruction Following.
+2. **Safety**: "Is it harmful or leaking data?"
+   - Toxicity, Bias, PII (Private Data) Leaks, Jailbreak Resistance.
+3. **Operations**: "Is it fast, cheap, and reliable?"
+   - Latency, Cost per request, Token efficiency, Error rates under load.
+
+### ⚠️ Important Insight:
+- The **SAME component** needs to be checked across different risk categories.
+- *Example*: Your Retriever fetches relevant documents (Quality check = ✅). But it takes 5 seconds to do it (Operations check = ❌). You need a Latency Eval for the Retriever *and* a Quality Eval for the Retriever. They are two different pipelines.
+
+---
+
+### 💻 Code Example: Evaluating the Same Component for Different Risks
+
+```python
+# Imagine we have a RAG system's Retriever component.
+
+class Retriever:
+    def fetch(self, query):
+        # Simulating a slow but accurate retriever
+        import time
+        time.sleep(5)  # Takes 5 seconds!
+        return ["Relevant Document 1", "Relevant Document 2"]
+
+# --- Eval 1: QUALITY RISK (Does it fetch relevant docs?) ---
+def evaluate_retriever_quality(retriever, query, expected_docs):
+    fetched = retriever.fetch(query)
+    # Check if the expected docs are in the fetched list
+    score = len(set(fetched) & set(expected_docs)) / len(expected_docs)
+    return score  # If score is 1.0, Quality is good.
+
+# --- Eval 2: OPERATIONAL RISK (Does it fetch fast enough?) ---
+def evaluate_retriever_latency(retriever, query, max_allowed_seconds=2.0):
+    import time
+    start = time.time()
+    retriever.fetch(query)
+    latency = time.time() - start
+    
+    if latency > max_allowed_seconds:
+        return f"❌ Ops Failed! Latency is {latency}s, exceeding {max_allowed_seconds}s."
+    else:
+        return f"✅ Ops Passed! Latency is {latency}s."
+
+# --- Running the evaluations ---
+my_retriever = Retriever()
+query = "ML course duration"
+expected = ["Relevant Document 1"]
+
+quality_score = evaluate_retriever_quality(my_retriever, query, expected)
+latency_result = evaluate_retriever_latency(my_retriever, query, 2.0)
+
+print(f"Quality Score: {quality_score * 100}%")  # Output: 100% (Good!)
+print(latency_result)  # Output: ❌ Ops Failed! Latency is 5.0s, exceeding 2.0s.
+# Conclusion: We need to run a different Eval (Latency) to catch this specific risk!
+```
+
+---
+
+### 📊 Specific Metrics by Application Type (The Instructor's Table)
+
+Here are the risks you will evaluate based on what you are building:
+
+| Application Type | Risks to Evaluate (Quality Pillar) |
+| :--- | :--- |
+| **General LLM App** (e.g., Summarizer) | Correctness, Relevance, Completeness, Instruction Following. |
+| **RAG App** (Retrieval + Gen) | Context Relevance (Retriever), Groundedness/Faithfulness, Citation Accuracy. |
+| **Agent App** (Uses Tools) | Tool Selection, Parameter Correctness, Task Completion, Error Recovery. |
+| **Multi-Turn Chatbot** | Context Retention (long-term memory), Clarification Behavior. |
+
+| Safety Pillar | Operational Pillar |
+| :--- | :--- |
+| Toxicity (Hate speech) | Latency (Time to first token) |
+| Harmful Content (Weapons, Self-harm) | Cost per request (Token usage) |
+| Bias (Gender/Race stereotyping) | Token Efficiency |
+| PII Leaks (Phone numbers, emails) | Error Rate & Performance under Load |
+| Prompt Injection / Jailbreak Resistance | Throughput |
+
+---
+
+## 📝 Final Summary of the Session
+
+| Key Point | Explanation |
+| :--- | :--- |
+| **One App ≠ One Eval** | A single application needs multiple evaluation pipelines running simultaneously. |
+| **Reason 1: Failures** | Components can work individually, but fail when combined (e.g., RAG's K=5 trap). You need Component, Workflow, AND Application-level evals. |
+| **Reason 2: Risks** | A system can be factually correct but unsafe, slow, or expensive. You need Quality, Safety, AND Operational evals. |
+| **Actionable Takeaway** | When you build your next LLM app, don't just write one test script. Write a script for **Retriever Quality**, one for **Answer Faithfulness**, one for **Latency**, and one for **PII Leakage**. |
+
+**Bottom Line**: Production-grade AI engineering is not about building a cool demo. It is about building multiple guardrails (evals) to catch every possible way your system can fail, whether it's a logical pipeline flaw or a security vulnerability. 🚀
+
+---
+
+## 05. LLM Eval Methods | LLM-as-a-Judge | Reference Based Evals Vs Reference Free Evals (53:09)
 
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
