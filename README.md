@@ -1080,4 +1080,209 @@ Here are the risks you will evaluate based on what you are building:
 
 ## 05. LLM Eval Methods | LLM-as-a-Judge | Reference Based Evals Vs Reference Free Evals (53:09)
 
+This lecture focusing on the core question: *"Who or what actually performs the comparison in an LLM evaluation pipeline?"* 
+
+The instructor defines the **3 core Evaluation Methods** (Programmatic, Human, and LLM-as-a-Judge), walks through detailed real-world examples for each, and ends with a key conceptual distinction (Reference-Based vs. Reference-Free).
+
+---
+
+## 🎯 Part 1: What is an "LLM Evaluation Method"?
+
+**Definition**: It is the **mechanism/executor** that takes an LLM output and produces a judgment about it. 
+
+**The 3 Core Methods**:
+1. **Programmatic (Deterministic)**: A Python script/code runs the comparison.
+2. **Human**: A human expert manually reviews and scores the output.
+3. **Model-Graded (LLM as a Judge)**: Another (usually stronger) LLM runs the comparison.
+
+---
+
+## 💻 Method 1: Programmatic / Deterministic Evaluation
+
+**When to use**: When the task has a **clearly defined correct answer** that code can easily compare (e.g., classification, retrieval accuracy).
+
+**Example Scenario**: Evaluating a **Retriever** in a RAG system for a CampusX chatbot. 
+The Retriever's job is to fetch relevant documents from a vector database for a given query.
+
+### Step-by-Step Workflow (Programmatic)
+
+1. **Task & Target**: Evaluate the Retriever component.
+2. **Success Criteria & Metric**: **Recall@K**.
+   - *Formula*: (Number of relevant documents retrieved in the top K) / (Total number of relevant documents that exist).
+3. **Golden Dataset**: A set of 50-100 test queries. For each query, a human expert manually tagged which document IDs contain the correct answer (e.g., Query 1 → Doc 1001; Query 2 → Docs 1001 & 1003).
+4. **Execution (Programmatic)**:
+   - Set `K=5`.
+   - Feed each query to the Retriever → It returns 5 document IDs.
+   - A Python script compares the Retrieved IDs vs. the Golden IDs to calculate Recall.
+   - Average the Recall across all queries.
+5. **Analysis & Improvement**: If Recall is low (e.g., 67%), you can improve by:
+   - Changing the Embedding Model.
+   - Increasing `K` (e.g., from 5 to 10).
+   - Adding a Reranker to push relevant docs higher.
+
+### 💻 Code Example: Programmatic Recall@K
+
+```python
+# Golden Dataset (Pre-tagged by a Human Expert)
+golden_data = {
+    "Q1: ML course prerequisites": {"relevant_docs": ["Doc_1001"]},
+    "Q2: ML course duration": {"relevant_docs": ["Doc_1001", "Doc_1003"]},
+}
+
+# Simulated Retriever output for Q2 with K=5
+retrieved_docs_for_Q2 = ["Doc_1001", "Doc_1002", "Doc_1004", "Doc_1005", "Doc_1006"]
+
+# --- Programmatic Evaluation (The Python Script) ---
+def calculate_recall_at_k(retrieved, relevant, k=5):
+    # Out of all relevant docs, how many did we fetch in our top-k?
+    if not relevant:
+        return 1.0  # Edge case
+    fetched_relevant = set(retrieved) & set(relevant)
+    return len(fetched_relevant) / len(relevant)
+
+# Run the script
+recall = calculate_recall_at_k(retrieved_docs_for_Q2, golden_data["Q2: ML course duration"]["relevant_docs"])
+print(f"Recall@5 for Q2: {recall * 100}%") 
+# Output: 50% (Fetched Doc_1001, missed Doc_1003)
+
+# Average over the entire dataset programmatically
+# This is cheap, fast, and repeatable! ✅
+```
+
+---
+
+## 🧑‍🏫 Method 2: Human-Based Evaluation
+
+**When to use**: When the output is **subjective** (e.g., "Is this response helpful?", "Does this have a good tone?"). Code cannot easily measure these.
+
+**Example Scenario**: Evaluating a general CampusX chatbot's **"Helpfulness"** on a scale of 1 to 5.
+
+### Step-by-Step Workflow (Human)
+
+1. **Task & Target**: Evaluate the entire chatbot's helpfulness.
+2. **Success Criteria**: A **Rubric** (1 = Not helpful, 3 = Partially helpful, 5 = Perfectly accurate, complete, and has the right tone).
+3. **Golden Dataset**: A list of 50-100 diverse questions (no correct answers provided here).
+4. **Execution (Human)**:
+   - Feed each question to the chatbot → Get an answer.
+   - Give the question and answer to a Human Grader.
+   - The Human reads the rubric and assigns a score (1-5).
+   - (Optional but recommended) Use **multiple graders**. If they disagree a lot, your rubric is ambiguous. If they agree, the rubric is clear.
+5. **Cost vs. Reliability Trade-off**: 
+   - **Pro**: Highly reliable judgment.
+   - **Con**: Very expensive and slow to scale.
+
+### Other Types of Human Evals Mentioned:
+- **Red Teaming**: Humans intentionally try to break the system (jailbreak, prompt injection).
+- **A/B Testing**: Users rate two versions in production to choose the better one.
+- **Human-in-the-Loop**: A human reviews and corrects outputs when the system is uncertain.
+
+### 💻 Code Example: Simulating Human Grading & Agreement
+
+```python
+# Simulating 2 Human graders scoring a chatbot's answer (1-5 scale)
+grader_A_scores = [5, 4, 3, 2, 5]  # Scores for 5 questions
+grader_B_scores = [4, 4, 2, 1, 5]  # Scores for the same 5 questions
+
+# Calculate average helpfulness score for the system (Human evals)
+average_score = sum(grader_A_scores) / len(grader_A_scores)
+print(f"System Helpfulness Score (Grader A): {average_score}/5")
+
+# Calculate agreement (disagreement metric)
+def calculate_disagreement(list_a, list_b):
+    diff_sum = sum(abs(a - b) for a, b in zip(list_a, list_b))
+    return diff_sum / len(list_a)
+
+disagreement = calculate_disagreement(grader_A_scores, grader_B_scores)
+print(f"Average Disagreement between graders: {disagreement:.2f} points")
+# If disagreement is high (e.g., 1.5), the rubric needs to be refined! ✅
+```
+
+---
+
+## 🤖 Method 3: Model-Graded Evaluation (LLM as a Judge)
+
+**When to use**: When the task is subjective (like human eval) but you need to scale it cheaply. This is the **most popular method** in production today.
+
+**Example Scenario**: Building an automated platform to evaluate **UPSC Mains (subjective) exam papers** for thousands of students, where hiring human experts would be too expensive.
+
+### Step-by-Step Workflow (LLM as a Judge)
+
+1. **Task & Target**: Evaluate the entire system that grades UPSC Mains answers.
+2. **Success Criteria**: The LLM grader must match the human expert's grading closely.
+3. **Golden Dataset**:
+   - Create a **Rubric** for each question (e.g., For a 15-mark question: check for definition, mechanisms, examples, balanced conclusion).
+   - A Human Expert grades **only 50 sample answers** using this rubric (these become the "Ground Truth" scores).
+4. **Execution (LLM)**:
+   - Write a detailed **System Prompt** telling the LLM: "You are a UPSC examiner. You have this rubric. Grade the following student answer. Give marks and a reasoning justification."
+   - Run the LLM on the same 50 answers.
+5. **Evaluate the Judge**: Compare Human Scores vs. LLM Scores using **Mean Absolute Error (MAE)**.
+   - *Formula*: `MAE = (Sum of |Human Score - LLM Score|) / (Number of Questions)`.
+   - If MAE is 2.3, it means the LLM is off by an average of 2.3 marks. The goal is to bring this number down to 0 (perfect match).
+
+### 💻 Code Example: LLM as a Judge & MAE Calculation
+
+```python
+# Golden Dataset: Human scores for 50 student answers (Ground Truth)
+human_scores = [13, 4, 8, 10]  # 4 sample answers (Max marks: 15)
+
+# LLM Judge outputs (after we prompted it with the rubric)
+llm_scores = [12, 8, 8, 9]     # Simulated LLM predictions
+
+# --- Calculating Performance (Metric for the Judge) ---
+def calculate_mae(human, llm):
+    errors = [abs(h - l) for h, l in zip(human, llm)]
+    return sum(errors) / len(errors)
+
+mae = calculate_mae(human_scores, llm_scores)
+print(f"Mean Absolute Error (MAE): {mae} marks")
+# Output: 2.0 marks
+# Interpretation: On average, the LLM is 2 marks off from the human expert.
+
+# We can now iterate:
+# 1. Improve the system prompt.
+# 2. Upgrade to a stronger LLM (GPT-4 instead of GPT-3.5).
+# 3. Rerun the MAE to see if it drops closer to 0.
+```
+
+---
+
+## 📑 Part 2: Reference-Based vs. Reference-Free Evaluations
+
+This is a conceptual distinction independent of the 3 methods above. It simply asks: **Does your Golden Dataset contain the "Correct Answer" or not?**
+
+| Type | Definition | Does Dataset have the right answer? | Examples from the video |
+| :--- | :--- | :--- | :--- |
+| **Reference-Based** | You compare the LLM output against a **pre-defined correct answer**. | ✅ YES | **Retriever Eval** (We know Doc 1001 is correct). <br> **UPSC LLM Judge** (We have the Human Expert's scores as the reference to compare against). |
+| **Reference-Free** | You judge the quality directly based on a **rubric/criteria**, without a single correct answer. | ❌ NO | **Human Helpfulness Eval** (No pre-defined correct answer; the human just rates it 1-5 based on feeling and rubric). |
+
+> **Simple Check**: Look at your golden dataset. If it has an "Expected Answer" column → **Reference-Based**. If it just has a "Question" column and you rely on a judge (human or LLM) to interpret quality → **Reference-Free**.
+
+---
+
+## 📝 Summary Table of Methods
+
+| Method | Executor | Best For | Pros | Cons |
+| :--- | :--- | :--- | :--- | :--- |
+| **Programmatic** | Code (Python) | Deterministic tasks (Classification, Retrieval). | Cheap, Fast, 100% Repeatable. | Cannot handle subjectivity. |
+| **Human** | Human Experts | Subjective tasks (Helpfulness, Tone, Red Teaming). | Highly Reliable, Great for complex judgment. | Expensive, Slow, Hard to scale. |
+| **LLM-as-a-Judge** | Another LLM | Subjective tasks that need scale (Grading essays, open-ended QA). | Cheap at scale, Fast, Mimics human logic. | Can be biased towards its own style, Costly for small tests. |
+
+---
+
+## 🚀 The Final Mindset Shift
+
+The instructor emphasizes a crucial point at the end: 
+> *"Building an LLM app is the easy part. The difficult part is making sure it works correctly **every time, everywhere**."*
+
+Moving forward, you are not just a "builder". You are a **Production AI Engineer** who thinks about:
+1. **Where** can this system fail? (Multiple Failure Points).
+2. **Who** should judge if it's working? (Programmatic, Human, or LLM?).
+3. **How** do we know it's good enough to deploy? (MAE < Threshold, Recall > 90%).
+
+---
+
+## 06. Offline Evals Vs Online Evals (01:21:08)
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
+
+- [Notes](https://onedrive.live.com/personal/85452F67DAA1111C/_layouts/15/Doc.aspx?sourcedoc={90714588-0955-47bc-bf9e-176879959e0d}&action=view&redeem=aHR0cHM6Ly8xZHJ2Lm1zL28vYy84NTQ1MkY2N0RBQTExMTFDL0lnQ0lSWEdRVlFtOFI3LWVGMmg1bFo0TkFheWVYXzlSM1Y0WEhERG1zWFlNbnJr&wd=target%281.%20Introduction%20to%20LLM%20Evals.one%7Ca35dbc27-08ab-4743-b3b0-6b36c29acfd5%2FCourse%20Outline%7C165aacba-2851-e54b-bf9f-885a1a42b9ee%2F%29&wdorigin=NavigationUrl)
