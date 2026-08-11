@@ -1283,6 +1283,223 @@ Moving forward, you are not just a "builder". You are a **Production AI Engineer
 
 ## 06. Offline Evals Vs Online Evals (01:21:08)
 
+The lecture explains why you cannot rely solely on pre-launch testing, using a powerful UPSC exam grader example to illustrate the difference between **"Correctness"** and **"Normalcy"**.
+
+---
+
+## 🔄 Part 1: Quick Recap of Previous Sessions
+
+Before starting today’s topic, here is a recap of what we have covered so far:
+
+1. **Why Evals?** To avoid legal troubles, reputation damage, and hallucinations.
+2. **What are Evals?** Systematic, repeatable tests against clear criteria.
+3. **Types of Evals:** Model Evals (done by labs) vs. Application Evals (done by you).
+4. **Eval Pipeline:** Task Definition → Dataset → Run → Analyze → Improve → Deploy.
+5. **Multiple Pipelines:** One app needs multiple evals because of **multiple failure points** (Component, Workflow, Application) and **multiple risk categories** (Quality, Safety, Operations).
+6. **Eval Methods:** Programmatic (code), Human, and LLM-as-a-Judge.
+
+Now, we move to the next crucial topic: **Offline vs. Online Evaluations**.
+
+---
+
+## 🏠 Part 2: Offline Evaluations (Pre-Deployment Testing)
+
+**Definition**: These are the evaluations you run on your application **BEFORE** you deploy it to production (staging/testing environment).
+
+**Key Characteristic**: You have a **fixed "Golden Dataset"** with known correct answers. You run tests against this dataset to check **Correctness**.
+
+### The 3 Massive Benefits of Offline Evals
+
+1. **Pre-Release Testing / Release Gating**:
+   - You can set a threshold (e.g., 95% accuracy).
+   - If the score passes the threshold, the code is automatically deployed (via CI/CD).
+   - If it fails, deployment is blocked, and the previous version stays live.
+
+2. **Version Comparison**:
+   - Unsure whether to use GPT-4 or Claude 3 for your app?
+   - Run the *exact same* offline eval on both versions.
+   - Compare the scores objectively and pick the winner.
+
+3. **Regression Testing**:
+   - *Definition*: Testing to ensure a new change (e.g., prompting the chatbot to be "kinder") doesn't break existing functionality (e.g., accidentally giving vague price estimates).
+   - Your golden dataset has different types of questions (Refund, Pricing, Curriculum). Run the eval before and after the change. If Pricing accuracy drops, a regression has occurred—don't deploy!
+
+### 💻 Code Example: Offline Eval Benefits
+
+```python
+# 1. RELEASE GATING (CI/CD Simulation)
+offline_score = run_offline_eval(golden_dataset, model_v2)
+if offline_score >= 95.0:
+    print("✅ Passed! Deploying to production...")
+    trigger_deployment()
+else:
+    print(f"❌ Failed! Score {offline_score}% < 95%. Rolling back.")
+    rollback_to_previous_version()
+
+# 2. VERSION COMPARISON (Model A vs Model B)
+def compare_versions(dataset, model_a, model_b):
+    score_a = run_eval(dataset, model_a)
+    score_b = run_eval(dataset, model_b)
+    if score_a > score_b:
+        print(f"Model A wins! ({score_a}% vs {score_b}%)")
+    else:
+        print(f"Model B wins! ({score_b}% vs {score_a}%)")
+    return max(score_a, score_b)
+
+# 3. REGRESSION TESTING (Checking if fixing one thing breaks another)
+# Dataset contains 30 Refund questions, 30 Pricing questions, 30 Curriculum questions.
+def run_regression_test(old_version, new_version, dataset):
+    old_scores = run_eval_by_category(old_version, dataset)
+    new_scores = run_eval_by_category(new_version, dataset)
+    
+    for category in old_scores.keys():
+        if new_scores[category] < old_scores[category] * 0.95: # 5% drop threshold
+            print(f"⚠️ Regression detected in {category}! Score dropped from {old_scores[category]}% to {new_scores[category]}%.")
+            return False # Do not deploy!
+    print("✅ No regression. Safe to deploy.")
+    return True
+```
+
+---
+
+## 🚨 Part 3: The 3 Major Risks in Production (Why Offline Eval is NOT enough)
+
+Even if your offline evals pass with 100% accuracy, once you deploy, you face entirely new risks:
+
+1. **Unanticipated User Inputs**:
+   - Users will ask questions you *never* added to your golden dataset (mixed Hindi/English, ambiguous half-questions, angry rants, adversarial prompt injections).
+   - You cannot predict every possible user query.
+
+2. **Emergent Systematic Failures**:
+   - **Concurrency/Latency**: Your system works fine with 10 users, but crashes or slows down with 10,000 concurrent users.
+   - **Bias**: A bias (e.g., against non-technical background users) only becomes statistically visible across thousands of conversations. You can't catch this with a few hundred test cases.
+
+3. **Data/Concept Drift**:
+   - Your business changes over time (prices change, course curriculums update, policies change).
+   - Your Golden Dataset was created based on *today's* data. One year later, the data distribution is completely different.
+   - Your offline eval will still show good scores, but in production, users will hate the chatbot because it gives outdated information.
+
+---
+
+## 🌐 Part 4: Online Evaluations (Post-Deployment Monitoring)
+
+**Definition**: Evaluations run **AFTER** deployment, on **live production traffic**, as real users interact with the system.
+
+**Key Characteristic**: **No Answer Key exists**. You do not know the "correct" answer for the live questions users are asking right now.
+
+**Core Difference**:
+- **Offline Eval** checks **Correctness** (Is the output right compared to the known correct answer?).
+- **Online Eval** checks **Normalcy** (Is the system behaving *normally* compared to a historical baseline?).
+
+### The UPSC Grader Example Explained
+
+**The System**: An LLM that grades UPSC Mains (subjective) exam papers like a human expert.
+
+- **Offline Phase (Checking Correctness)**:
+  - You took 100 old student answers.
+  - A Human Expert graded them (Ground Truth).
+  - Your LLM graded the same 100 answers.
+  - You calculated **Mean Absolute Error (MAE)** between Human and LLM scores.
+  - If MAE is low (e.g., 1.2 marks), you assume it's "Correct" and deploy.
+
+- **Online Phase (Checking Normalcy)**:
+  - Now the system is live. 10,000 new students write exams today.
+  - You **do NOT** have human scores for these 10,000 answers to compare against.
+  - So, you cannot check *Correctness*.
+  - Instead, you plot the **Distribution of Scores** (bell curve) for Week 1.
+  - You record this as your **Baseline Normalcy** (e.g., Mean = 500/1000, Std Dev = 100).
+  - In Week 2, you plot the distribution again. Suddenly, the mean jumps to 800/1000.
+  - **Alert!** The system is not running *normally* anymore. Something changed (maybe a prompt update made it too lenient, or a bug broke the grading logic). You investigate immediately.
+
+### 💻 Code Example: Online Monitoring of Score Distributions
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Simulating weekly score distributions from the UPSC grader system
+
+# Week 1 Baseline (Normal)
+week1_scores = np.random.normal(loc=500, scale=100, size=1000)  # Mean 500
+baseline_mean = np.mean(week1_scores)
+baseline_std = np.std(week1_scores)
+print(f"Week 1 Baseline: Mean = {baseline_mean:.1f}, Std = {baseline_std:.1f}")
+
+# Week 2 Monitoring (Suddenly, the system starts giving higher marks)
+week2_scores = np.random.normal(loc=800, scale=90, size=1000) # Mean jumped to 800
+
+current_mean = np.mean(week2_scores)
+current_std = np.std(week2_scores)
+
+# Check for "Normalcy" using a threshold (e.g., 10% deviation from baseline)
+if abs(current_mean - baseline_mean) > (0.1 * baseline_mean):
+    print(f"🚨 ALERT: Mean shifted from {baseline_mean:.1f} to {current_mean:.1f}!")
+    print("🔍 Investigate: System is behaving ABNORMALLY (Potential Drift/Bug).")
+else:
+    print("✅ System is running NORMALLY.")
+
+# Plotting would show the bell curve shifting to the right.
+```
+
+---
+
+## 📊 Part 5: Side-by-Side Comparison Matrix
+
+| Feature | Offline Evaluation | Online Evaluation |
+| :--- | :--- | :--- |
+| **Timing** | **Before** Deployment. | **After** Deployment. |
+| **Data** | **Fixed Golden Dataset** (pre-collected). | **Live Production Traffic** (real-time data). |
+| **Answer Key** | ✅ **Exists** (You have the correct answers). | ❌ **Does not exist** (No correct answer available live). |
+| **Inputs** | You only test **anticipated** edge cases. | Users can throw **any unanticipated** input. |
+| **What it Checks** | **Correctness** (Is the answer right?). | **Normalcy** (Is the behavior normal compared to baseline?). |
+| **Catch** | Catches **Regressions** (Pre-launch). | Catches **Drift, Emergent Bugs, and Surprises** (Post-launch). |
+| **Cost/Speed** | **Cheap & Fast** (small dataset). | **Expensive** (requires sampling large data). Often uses sampling (e.g., monitor only 1,000 out of 50,000 daily conversations). |
+
+---
+
+## 🔧 Part 6: Alternative Online Signals (When you don't have a baseline)
+
+If you cannot compare distributions, you can use **User Signals** as a proxy for correctness:
+
+- **Thumbs Up / Thumbs Down**: If you see a sudden spike in "Thumbs Down" in the last hour, something is wrong with your chatbot's correctness.
+- **Escalations**: If your customer support team suddenly gets a flood of complaints about wrong answers, your system has lost correctness, even if the score distribution looks normal.
+
+### 💻 Code Example: Monitoring User Feedback Signals
+
+```python
+# Tracking user feedback over time
+feedback_log = {
+    "10:00 AM": {"thumbs_up": 50, "thumbs_down": 2},
+    "11:00 AM": {"thumbs_up": 60, "thumbs_down": 3},
+    "12:00 PM": {"thumbs_up": 45, "thumbs_down": 40}, # Spike in downvotes!
+}
+
+threshold = 20  # Acceptable downvotes per hour
+
+def monitor_live_feedback(log):
+    for hour, data in log.items():
+        if data["thumbs_down"] > threshold:
+            print(f"⚠️ ALERT: Downvote spike at {hour}! {data['thumbs_down']} downvotes.")
+            print("💡 This indicates users are likely receiving incorrect answers.")
+            trigger_investigation()
+
+monitor_live_feedback(feedback_log)
+```
+
+---
+
+## 📝 Final Summary
+
+| Concept | Definition | Example |
+| :--- | :--- | :--- |
+| **Offline Eval** | Testing done **before launch** with a golden dataset to check **Correctness**. | Comparing your LLM's score to a Human Expert's score on 100 questions. |
+| **Online Eval** | Monitoring done **after launch** on live traffic without an answer key to check **Normalcy**. | Plotting the weekly bell curve of scores to see if the distribution suddenly shifts. |
+| **Complementary** | Offline and Online Evals are **not rivals**. You **need both**. Offline prevents bad launches; Online prevents silent death in production due to drift or unforeseen user behavior. |
+
+**Bottom Line**: Offline evals tell you, *"Is this system technically correct to launch?"* Online evals tell you, *"Is this system still working correctly for real users right now?"* You cannot skip either if you want a production-grade AI application. 🚀
+
+---
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 - [Notes](https://onedrive.live.com/personal/85452F67DAA1111C/_layouts/15/Doc.aspx?sourcedoc={90714588-0955-47bc-bf9e-176879959e0d}&action=view&redeem=aHR0cHM6Ly8xZHJ2Lm1zL28vYy84NTQ1MkY2N0RBQTExMTFDL0lnQ0lSWEdRVlFtOFI3LWVGMmg1bFo0TkFheWVYXzlSM1Y0WEhERG1zWFlNbnJr&wd=target%281.%20Introduction%20to%20LLM%20Evals.one%7Ca35dbc27-08ab-4743-b3b0-6b36c29acfd5%2FCourse%20Outline%7C165aacba-2851-e54b-bf9f-885a1a42b9ee%2F%29&wdorigin=NavigationUrl)
