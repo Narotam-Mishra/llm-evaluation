@@ -1500,6 +1500,257 @@ monitor_live_feedback(feedback_log)
 
 ---
 
+## 📌 Part 1: Step 1 – Non-Blocking Durable Logging
+
+**Definition**: Before you can evaluate anything in production, you must **record (log) everything** that happens during every user conversation.
+
+**What to Log (The Data Schema)**:
+- `Conversation ID`, `Turn ID`, `User ID`, `Session ID`, `Timestamp`.
+- User's question (Prompt).
+- Retrieved Context (if using RAG).
+- LLM's final output (Response).
+- Operational metadata: Latency (ms), Prompt Tokens, Completion Tokens, Total Cost, Error Status Codes.
+- User signals: Thumbs Up/Down, Escalations (user asking for a human), repeated rephrasing of the same question.
+
+**4 Key Engineering Properties of Logging**:
+1. **Non-Blocking**: Logging should NOT slow down the user's experience. Use async/background processes.
+2. **Durable & Queryable**: Store logs in a proper data warehouse/observability tool (like **LangSmith**) so you can search/filter them later.
+3. **Late Signal Attachments**: Sometimes user feedback (like an angry email) comes *hours later*. You must be able to attach that feedback to the correct `Conversation ID` later.
+4. **PII Masking**: Before storing, automatically mask Personal Identifiable Information (phone numbers, credit cards, email IDs) to maintain privacy and security.
+
+### 💻 Code Example: Non-Blocking Async Logging
+
+```python
+import asyncio
+import uuid
+from datetime import datetime
+
+# Simulated logging function (writes to a database/observability tool)
+async def log_conversation_async(user_query, llm_response, metadata):
+    # Simulate a small network/database write delay (0.1 seconds)
+    await asyncio.sleep(0.1) 
+    log_entry = {
+        "conversation_id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat(),
+        "query": user_query,
+        "response": llm_response,
+        "latency_ms": metadata.get("latency", 0),
+        "cost": metadata.get("cost", 0.0),
+        "status": metadata.get("status", 200)
+        # Note: PII masking would happen here before saving.
+    }
+    print(f"Logged: {log_entry['conversation_id']}")
+    return log_entry
+
+# Main chatbot handler (Non-blocking behavior)
+async def handle_user_query(user_input):
+    # 1. Start the LLM call (simulate)
+    start_time = datetime.now()
+    llm_output = f"Response to: {user_input}"  # Simulate LLM
+    latency = (datetime.now() - start_time).total_seconds()
+    
+    # 2. Fire the logging in the background (does NOT await fully, or uses create_task)
+    # The user gets the response IMMEDIATELY without waiting for the log to finish.
+    asyncio.create_task(log_conversation_async(
+        user_input, 
+        llm_output, 
+        {"latency": latency, "cost": 0.002}
+    ))
+    
+    # 3. Return response to user instantly.
+    return llm_output
+
+# Simulating a user request
+response = asyncio.run(handle_user_query("What is the price?"))
+print(f"User sees: {response}") 
+# Output: Logging happens in background, user doesn't wait for it.
+```
+
+---
+
+## 📊 Part 2: Two Types of Signals (Captured vs. Computed)
+
+Once you log the data, you need to extract meaningful metrics. They fall into two categories:
+
+1. **Captured Signals (No Computation)**:
+   - Directly recorded during the conversation. No extra processing needed.
+   - Examples: Latency, Total Cost, Token usage, Thumbs Up/Down, Error Codes.
+2. **Computed Signals (Needs Computation)**:
+   - You must calculate these by running an evaluator (usually an **LLM-as-a-Judge**) on the logged data.
+   - Examples: Faithfulness (groundedness), Answer Relevancy, Toxicity, Bias, Hallucination.
+
+### 💻 Code Example: Differentiating Signals
+
+```python
+# Simulating a logged conversation trace from LangSmith
+trace = {
+    "question": "Tell me about Python.",
+    "response": "Python is a high-level language.",
+    "latency": 1.2,           # 🟢 CAPTURED (Just store it)
+    "total_cost": 0.004,      # 🟢 CAPTURED (Just store it)
+    "thumbs_up": None,        # 🟢 CAPTURED (Wait for user to click)
+}
+
+# 🟡 COMPUTED SIGNAL: Hallucination Score (Needs an LLM Judge)
+def compute_hallucination_score(question, response, retrieved_context):
+    # In reality, we call GPT-4/GPT-3.5 with a special rubric.
+    # Simulate a score between 0 and 1.
+    if "Python" in response and "programming" in retrieved_context:
+        return 0.95  # Very faithful
+    else:
+        return 0.20  # Likely hallucinated
+
+# We only compute this OFFLINE/ASYNC after the trace is logged.
+hallucination_score = compute_hallucination_score(
+    trace["question"], 
+    trace["response"], 
+    "Python is a programming language." 
+)
+print(f"Computed Hallucination Score: {hallucination_score}")
+```
+
+---
+
+## 🔄 Part 3: Pipeline for Captured Signals (Simple Flow)
+
+For **Captured Signals**, the flow is straightforward:
+
+1. **Logging** → Store the raw metric (e.g., `latency = 1.2s`).
+2. **Dashboarding** → Aggregate these metrics over time (e.g., Average latency for the last 1 hour) and visualize them on a graph.
+3. **Alerting** → If the aggregated metric crosses a threshold (e.g., Average latency > 3 seconds for 5 minutes), trigger an alert (Slack, Email, PagerDuty).
+
+---
+
+## 🤖 Part 4: Pipeline for Computed Signals (The Core Challenge)
+
+For **Computed Signals**, you cannot afford to run an LLM-as-a-Judge on every single conversation (too expensive). You must **sample**.
+
+**The Full Flow**:
+1. **Logging** (Store all 5,000 daily conversations).
+2. **Sampling** (Select a subset, e.g., 1,000 out of 5,000).
+3. **Evaluation** (Run your LLM-as-a-Judge evaluator *only* on the sampled conversations to compute metrics like Hallucination Rate).
+4. **Dashboarding** (Visualize the computed metric over time).
+5. **Alerting** (Trigger alerts if the metric deviates from the baseline).
+
+### 🎯 Why Stratified Sampling > Random Sampling
+Randomly picking 1,000 out of 5,000 conversations is risky. You might miss all the problematic ones! 
+**Stratified Sampling**: You categorize conversations first and sample more heavily from "high-risk" categories:
+- Conversations with **Thumbs Down**.
+- Conversations that ended in **Escalation** (user asked for a human).
+- Conversations involving **Money/Refunds** (high business impact).
+
+### 💻 Code Example: Stratified Sampling Strategy
+
+```python
+import random
+
+# Simulated daily conversations (logged traces)
+daily_conversations = [
+    {"id": 1, "category": "normal", "feedback": "thumbs_up"},
+    {"id": 2, "category": "refund", "feedback": "thumbs_down"}, # High risk
+    {"id": 3, "category": "normal", "feedback": None},
+    # ... imagine 5000 of these
+]
+
+# Function to perform stratified sampling
+def stratified_sample(conversations, total_sample_size=1000):
+    # Separate into high-risk and low-risk
+    high_risk = [c for c in conversations if c["category"] in ["refund", "payment"] or c["feedback"] == "thumbs_down"]
+    low_risk = [c for c in conversations if c not in high_risk]
+    
+    # Sample 70% from high-risk and 30% from low-risk (overweight high-risk)
+    sample_size_high = int(total_sample_size * 0.7)
+    sample_size_low = total_sample_size - sample_size_high
+    
+    sampled_high = random.sample(high_risk, min(len(high_risk), sample_size_high))
+    sampled_low = random.sample(low_risk, min(len(low_risk), sample_size_low))
+    
+    return sampled_high + sampled_low
+
+# Run the evaluator ONLY on this biased sample to catch more bugs per dollar.
+sampled_traces = stratified_sample(daily_conversations, 1000)
+print(f"Evaluating {len(sampled_traces)} traces (focused on risky ones)")
+```
+
+---
+
+## 🛠️ Part 5: Platform Demo (LangSmith Features)
+
+The instructor shows LangSmith as a complete platform where:
+
+- **Traces** = Logged conversations.
+- **Evaluators** = Pre-built templates for hallucination, PII leakage, prompt injection, toxicity, etc., all using **LLM-as-a-Judge**.
+- **Key Differentiator**: You can run the *same evaluator* on a **Dataset** (Offline) OR on a **Trace** (Online).
+  - Running on a **Dataset** = Offline Evaluation.
+  - Running on a **Trace** = Online Evaluation (monitors live traffic).
+
+---
+
+## 🔁 Part 6: Closing the Self-Improving Loop
+
+This is the most important architectural insight of the course.
+
+1. **Offline Eval** uses a Golden Dataset to test correctness pre-launch.
+2. **Online Eval** monitors live traffic for normalcy.
+3. When the Online Eval finds a **production failure** (e.g., a buggy conversation):
+   - You click "**Add to Dataset**" in LangSmith.
+   - That specific failed conversation is added to your Offline Golden Dataset.
+4. Next time you release a new version, the Offline Eval runs on this **updated dataset**, catching that specific bug forever.
+
+**This creates a continuous loop**: Offline → Deploy → Online detects bug → Bug goes back to Offline → Repeat. The system automatically improves over time.
+
+### 💻 Code Example: Simulating the Feedback Loop
+
+```python
+# Simulating the offline golden dataset and online failure loop
+
+# Initial Golden Dataset (Offline)
+golden_dataset = [
+    {"question": "What is Python?", "expected": "Programming language."}
+]
+
+# Simulate a production failure (detected via online monitoring)
+production_failure = {
+    "question": "How much is the refund?",
+    "wrong_answer": "Refund is $1000.",  # Bot gave wrong answer
+    "correct_answer": "Refund is $100."   # Human verified later
+}
+
+# THE LOOP: Add the production failure back to the offline dataset
+def add_failure_to_dataset(dataset, failure):
+    dataset.append({
+        "question": failure["question"],
+        "expected": failure["correct_answer"]  # Now offline test will catch this!
+    })
+    print(f"Added failure to offline dataset. New dataset size: {len(dataset)}")
+
+# Next time we run Offline Eval, it checks against this new edge case.
+add_failure_to_dataset(golden_dataset, production_failure)
+# Output: Added failure to offline dataset. New dataset size: 2
+```
+
+---
+
+## 📝 Final Summary / Key Takeaways
+
+| Concept | Explanation |
+| :--- | :--- |
+| **Online Pipeline** | Logging → Sampling (for computed) → Dashboarding → Alerting. |
+| **Step 1: Logging** | Must be non-blocking, durable, queryable, PII-safe. |
+| **Captured Signals** | Latency, Cost, Thumbs Up/Down (directly stored). |
+| **Computed Signals** | Hallucination, Toxicity, Faithfulness (require an LLM Judge). |
+| **Sampling Strategy** | **Stratified** over **Random** (prioritize high-risk conversations). |
+| **The Loop** | Online production failures must be fed back into the offline Golden Dataset for continuous system improvement. |
+| **Mindset Shift** | You are not just a "builder" anymore. You are a **Production AI Engineer** ensuring the app works everywhere, every time. |
+
+**Bottom Line**: Offline evals tell you *"Can we launch?"* Online evals tell you *"Is it still working right now?"* You combine both and use the online failures to constantly upgrade your offline tests—creating an unstoppable quality feedback loop. 🚀
+
+---
+
+## 07. LLM Model Evals & Capabilities (37:51)
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
+
+---
 
 - [Notes](https://onedrive.live.com/personal/85452F67DAA1111C/_layouts/15/Doc.aspx?sourcedoc={90714588-0955-47bc-bf9e-176879959e0d}&action=view&redeem=aHR0cHM6Ly8xZHJ2Lm1zL28vYy84NTQ1MkY2N0RBQTExMTFDL0lnQ0lSWEdRVlFtOFI3LWVGMmg1bFo0TkFheWVYXzlSM1Y0WEhERG1zWFlNbnJr&wd=target%281.%20Introduction%20to%20LLM%20Evals.one%7Ca35dbc27-08ab-4743-b3b0-6b36c29acfd5%2FCourse%20Outline%7C165aacba-2851-e54b-bf9f-885a1a42b9ee%2F%29&wdorigin=NavigationUrl)
