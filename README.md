@@ -1500,6 +1500,10 @@ monitor_live_feedback(feedback_log)
 
 ---
 
+## Offline Vs Online EVals (Contd...)
+
+The part of tutorial explains how to monitor a live LLM application, from logging conversations to setting up alerts, and emphasizes the continuous feedback loop between online failures and offline testing.
+
 ## 📌 Part 1: Step 1 – Non-Blocking Durable Logging
 
 **Definition**: Before you can evaluate anything in production, you must **record (log) everything** that happens during every user conversation.
