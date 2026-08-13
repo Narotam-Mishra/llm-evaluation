@@ -1753,6 +1753,176 @@ add_failure_to_dataset(golden_dataset, production_failure)
 
 ## 07. LLM Model Evals & Capabilities (37:51)
 
+## 🔄 Part 1: Quick Recap of the Course So Far
+
+Before starting the new topic, here is a lightning recap:
+
+1. **Why Evals?** To avoid legal/reputation disasters (Air Canada, Lawyer cases).
+2. **What are Evals?** Systematic, repeatable tests against clear criteria.
+3. **Types:** **Model Evals** (testing the base LLM) vs. **Application Evals** (testing your built system).
+4. **How it Works:** The standard eval pipeline (Task → Dataset → Run → Analyze → Deploy).
+5. **Multiple Pipelines:** One app needs multiple evals because of multiple failure points and risk categories.
+6. **Online Evals:** Monitoring live production traffic for *normalcy* after deployment.
+
+**Now, we shift focus to Model Evals** (the "brain" selection phase).
+
+---
+
+## 🧠 Part 2: Why AI Engineers *Need* Model Evals
+
+As an AI Engineer, you don't train LLMs (OpenAI/Google do that). But you **choose** which LLM powers your application. Model Evals give you the data to make that choice.
+
+**The 4 Critical Reasons for AI Engineers:**
+
+1. **Compare Models Objectively**: In a team meeting, you can't say "both are good." You need hard numbers to prove why you chose OpenAI over Claude (or vice versa).
+2. **Track New Model Improvements**: If Claude releases a new version (e.g., Opus → Sonnet), Model Evals help you determine if it is *actually* better for your use case before you upgrade.
+3. **Check Safety & Robustness**: Evaluate if a model is safe, hallucinates rarely, and resists jailbreaks *before* exposing it to users.
+4. **Decide: Proprietary vs. Open Source**: Should you pay for a heavy API (like Claude) or host a cheaper open-source model (like DeepSeek/Mixtral) yourself? Model Evals give you the ROI comparison.
+
+> **Key Statement**: *"Without Model Evals, you are blind."*
+
+---
+
+## 🔬 Part 3: The 4-Step Structure of a Model Evaluation
+
+Every Model Eval follows this exact process:
+
+| Step | Action | Explanation |
+| :--- | :--- | :--- |
+| **1** | **Decide the Capability** | What do you want to test? (Reasoning? Coding? Safety?) |
+| **2** | **Bring a Test** | Get a standardized **Benchmark** OR build a **Custom Dataset** for your specific task. |
+| **3** | **Run Under Controlled Protocol** | Run the LLM on the test in a fixed environment (same temperature, same prompts) so results are repeatable across models. |
+| **4** | **Score & Interpret** | Analyze the results to compare models or decide if the model passes your threshold. |
+
+---
+
+## 📂 Part 4: Standard Benchmarks vs. Custom Evals
+
+There are **two types of tests** you can use for Model Evals:
+
+1. **Standardized Benchmarks** (e.g., MMLU, GSM8K, SWE-bench):
+   - Shared, global tests that everyone runs.
+   - Great for *general* comparison (e.g., "Which model is smarter?").
+2. **Custom Evals (Private Datasets)**:
+   - You create your own dataset from your company's *actual* use case (e.g., 200 past Zomato emails).
+   - Measures *specific* performance for *your* application, not general capability.
+
+### 💡 The Zomato Case Study (Why Custom Evals Win)
+
+**Scenario**: You are building an email classification system for Zomato (Billing vs. Technical vs. Refund). You have two model choices:
+
+| Model | Public Benchmarks (General) | Accuracy (Your Custom Eval) | Cost (1M Tokens) | Latency |
+| :--- | :--- | :--- | :--- | :--- |
+| **Model A** (Big/Expensive) | Top of the leaderboard 🥇 | **94%** | **$15.00** | **4.1 sec** |
+| **Model B** (Small/Cheap) | Mid of the table 😐 | **91%** | **$0.50** | **0.9 sec** |
+
+**If you only looked at public benchmarks**, you would blindly choose Model A (it wins everywhere). 
+**But with a Custom Eval**, you see the truth: Model B gives 91% accuracy (only 3% less) but is **30x cheaper** and **4.5x faster**. For a massive company like Zomato, Model B is the clear business winner.
+
+### 💻 Code Example: The "Custom Eval" ROI Decision Logic
+
+```python
+# Simulating the Zomato Email Classification Choice
+public_benchmarks = {
+    "Model_A": {"MMLU": 89, "GSM8K": 92}, # Wins here
+    "Model_B": {"MMLU": 72, "GSM8K": 75}, # Loses here
+}
+
+# But Custom Evals tell the real story for YOUR app
+custom_eval_results = {
+    "Model_A": {"accuracy": 94, "cost_per_mil": 15.0, "latency_sec": 4.1},
+    "Model_B": {"accuracy": 91, "cost_per_mil": 0.5, "latency_sec": 0.9},
+}
+
+def calculate_roi(model_name, daily_million_tokens=10):
+    data = custom_eval_results[model_name]
+    daily_cost = data["cost_per_mil"] * daily_million_tokens
+    monthly_cost = daily_cost * 30
+    return {
+        "accuracy": data["accuracy"],
+        "daily_cost": daily_cost,
+        "monthly_cost": monthly_cost,
+        "latency": data["latency_sec"]
+    }
+
+roi_a = calculate_roi("Model_A")
+roi_b = calculate_roi("Model_B")
+
+print(f"Model A: Acc {roi_a['accuracy']}% | Monthly Cost ${roi_a['monthly_cost']:.0f} | Latency {roi_a['latency']}s")
+print(f"Model B: Acc {roi_b['accuracy']}% | Monthly Cost ${roi_b['monthly_cost']:.0f} | Latency {roi_b['latency']}s")
+
+# Decision Logic
+if roi_b["accuracy"] > 90 and roi_b["monthly_cost"] < roi_a["monthly_cost"]:
+    print("🏆 Decision: Select Model B. It is 'good enough' for the task and saves massive costs.")
+# Output: Model B wins on ROI!
+```
+
+---
+
+## 📊 Part 5: The 8 Core Capabilities of LLMs (What Benchmarks Measure)
+
+Every famous benchmark you see (MMLU, SWE-bench, etc.) targets one of these **8 Core Capabilities**. Here is the breakdown:
+
+### 1. Knowledge & Reasoning
+- **What**: Does the model know facts across domains (Science, History, Law) and can it connect multiple facts to solve complex logic problems?
+- **Why important**: Measures the model's raw "intelligence".
+- **Famous Benchmark**: **MMLU** (57 subjects).
+- **Real-world use**: Research chatbots, legal/policy analysis.
+
+### 2. Coding & Software Engineering
+- **What**: Can it write functional code, fix bugs in large codebases, refactor code, and use APIs/command lines?
+- **Why important**: **Huge economic value** (Cursor AI valued at $60B because of this).
+- **Famous Benchmark**: **SWE-bench**.
+- **Real-world use**: AI coding agents, automated DevOps.
+
+### 3. Mathematics
+- **What**: Can it solve grade-school math, competition-level (Olympiad), undergraduate, and even research-level symbolic/numerical problems?
+- **Famous Benchmark**: **GSM8K**.
+- **Real-world use**: Financial modeling, scientific computing, engineering simulations.
+
+### 4. Long Context Management
+- **What**: Can it effectively retrieve and use information from *very long* inputs (hundreds of thousands of tokens), or does it "forget" the middle parts?
+- **Why important**: Models claim huge context windows (1M tokens), but actual retention degrades.
+- **Famous Benchmark**: **Needle in a Haystack**.
+- **Real-world use**: Analyzing giant legal contracts, coding across large codebases.
+
+### 5. Vision & Multimodality
+- **What**: Can it understand images, videos, and charts, or is it strictly text-only?
+- **Real-world use**: Visual QA (reading fridge contents), document analysis with graphs.
+
+### 6. Agentic & Tool Use
+- **What**: Can it autonomously choose and use tools (web browsing, API calls, desktop control) to accomplish a multi-step goal?
+- **Real-world use**: Building AI agents that book flights, order groceries, or control software.
+
+### 7. Safety & Alignment
+- **What**: Does it generate harmful/hateful content? Is it sycophantic (just agreeing with the user) or truthful? Does it resist adversarial attacks/jailbreaks? Does it have cybersecurity skills (ethical hacking)?
+- **Why important**: Government regulations and reputation.
+- **Famous Benchmark (emerging)**: CyberSec Eval (tests cryptographic/reverse engineering skills).
+
+### 8. Instruction Following
+- **What**: Can it strictly obey user constraints (e.g., "Keep it under 200 words", "Use bullet points", "Be friendly")?
+- **Why important**: Directly translates to user satisfaction. If a model ignores instructions, users leave.
+- **Famous Benchmark**: **IFEval**.
+
+---
+
+## 📝 Summary Table of 8 Capabilities
+
+| # | Capability | What it Tests | Key Benchmark | Relevance |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | Knowledge & Reasoning | Factual recall + multi-step logic | **MMLU** | Measures general "IQ" |
+| 2 | Coding & Engineering | Writing, fixing, and refactoring code | **SWE-bench** | Massive economic value (AI coders) |
+| 3 | Mathematics | Symbolic/numerical reasoning | **GSM8K** | Scientific/Fintech apps |
+| 4 | Long Context | Retrieving info from huge documents | **Needle in a Haystack** | Legal/Coding agents |
+| 5 | Vision/Multimodal | Understanding images/video | MMMU | Real-world visual tasks |
+| 6 | Agentic/Tool Use | Calling APIs and using tools autonomously | ToolBench | Building AI Agents |
+| 7 | Safety & Alignment | Toxicity, jailbreak resistance, truthfulness | CyberSec Eval | Legal compliance |
+| 8 | Instruction Following | Obeying format, length, and tone constraints | **IFEval** | Direct user satisfaction |
+
+---
+
+## 08. Whats is LLM Benchmarking | Benchmark Saturation vs. Contamination (51:19)
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 ---
