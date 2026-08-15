@@ -1923,7 +1923,59 @@ Every famous benchmark you see (MMLU, SWE-bench, etc.) targets one of these **8 
 
 ## 08. Whats is LLM Benchmarking | Benchmark Saturation vs. Contamination (51:19)
 
+### Running the GSM8K evaluation
+
+The `run_gsm8k.sh` script executes this command:
+
+```bash
+exec "$script_dir/venv/bin/lm-eval" run \
+  --model openai-chat-completions \
+  --model_args "model=gpt-5.6-luna,num_concurrent=5,max_retries=5" \
+  --tasks gsm8k_cot \
+  --num_fewshot 8 \
+  --apply_chat_template \
+  --limit 20 \
+  --output_path ./gsm8k_results \
+  --log_samples
+```
+
+This runs an 8-shot, chain-of-thought GSM8K mathematics evaluation against GPT-5.6 Luna through the OpenAI Chat Completions API. It evaluates only 20 questions as a quick test and writes the metrics and individual model responses to `gsm8k_results`.
+
+#### Command breakdown
+
+| Part | Meaning |
+|---|---|
+| `exec` | Replaces the shell-script process with the `lm-eval` process. The script exits with the same exit status as `lm-eval`, and no script commands run after it. |
+| `"$script_dir/venv/bin/lm-eval"` | Runs the exact `lm-eval` executable from this project's virtual environment. Using `$script_dir` makes it work regardless of the directory from which the script is launched. |
+| `run` | Selects the lm-evaluation-harness command that runs an evaluation. |
+| `--model openai-chat-completions` | Uses lm-eval's adapter for OpenAI's Chat Completions API rather than loading a model locally. `OPENAI_API_KEY` must be exported; the script loads it from `.env`. |
+| `model=gpt-5.6-luna` | Sends the prompts to the GPT-5.6 Luna model. API usage is billed to the OpenAI Platform project associated with the key. |
+| `num_concurrent=5` | Allows up to five API requests to run concurrently. This can reduce runtime, but it may encounter rate limits sooner than sequential requests. |
+| `max_retries=5` | Retries a failed API request up to five times for temporary errors such as rate limits or network interruptions. It does not repair an invalid API key. |
+| `--tasks gsm8k_cot` | Runs the chain-of-thought configuration of GSM8K, a benchmark of grade-school mathematical reasoning. |
+| `--num_fewshot 8` | Includes eight solved examples in the prompt before each question. These demonstrations show the expected reasoning and answer format. |
+| `--apply_chat_template` | Formats the benchmark prompt as chat messages in the structure expected by a chat model. |
+| `--limit 20` | Evaluates only 20 benchmark examples. This is useful for a smoke test, but the resulting score is not a reliable full benchmark metric. Remove this option for a real evaluation. |
+| `--output_path ./gsm8k_results` | Writes results beneath `gsm8k_results` relative to the script directory. |
+| `--log_samples` | Saves per-question prompts, model responses, target answers, and scoring information in addition to aggregate metrics. This requires `--output_path`. |
+
+The backslash (`\`) at the end of each line tells the shell that the command continues on the next line. It is one command, formatted across multiple lines for readability.
+
+Run the script with:
+
+```bash
+cd 08_llm-benchmarking
+./run_gsm8k.sh
+```
+
+For a full benchmark, remove `--limit 20`. Be aware that a full run sends many more billable API requests and takes longer.
+
+---
+
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
+
+
 
 ---
 
