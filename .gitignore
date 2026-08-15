@@ -49,6 +49,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Project-local environments (including symlinks and backups)
+/08_llm-benchmarking/venv
+/08_llm-benchmarking/venv-python314-backup/
+
 # pyenv
 .python-version
 
