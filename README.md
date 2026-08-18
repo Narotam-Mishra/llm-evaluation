@@ -2335,6 +2335,316 @@ print(evaluate_hle(response))
 
 ---
 
+This part of tutorial from **LLM Benchmarks** (contd...)
+
+It starts with the introduction of **BenchWiki** (a central database for benchmarks) and then walks through the detailed architecture, scoring methods, flaws, and current status of MMLU, TruthfulQA, AGI Eval, GPQA, MMLU Pro, SimpleQA, and Humanity's Last Exam (HLE).
+
+---
+
+## 📚 Part 1: Introducing BenchWiki (The Benchmark Encyclopedia)
+
+- **What**: The instructor is building an open website called **BenchWiki** (like Wikipedia for LLM benchmarks).
+- **Purpose**: To provide a single source of truth containing:
+  - Current status (Active, Saturated, Retired).
+  - Performance charts over time.
+  - Human baseline comparisons.
+  - Task details, sample datasets, scoring methodology.
+  - Contamination notes and run configurations.
+- **For You**: You can use it for self-study to understand any benchmark in depth.
+
+---
+
+## 🔬 Part 2: Deep Dive into the 7 Knowledge Benchmarks
+
+Here is the detailed breakdown of each benchmark, exactly as presented.
+
+### 1. MMLU (Massive Multitask Language Understanding) – *The "Mother of all Benchmarks"*
+
+| Aspect | Details |
+| :--- | :--- |
+| **Year** | 2020 |
+| **Core Focus** | **Breadth** of Knowledge (How much does the model know across many fields?) |
+| **Dataset** | 14,000 MCQs across **57 subjects** (Humanities, STEM, Social Sciences, etc.). |
+| **Source** | Real exams (GRE, USMLE, AP) and textbooks. |
+| **Scoring Methods** | **1. Generation**: Model outputs "A/B/C/D". <br> **2. Log-Likelihood**: Compute the probability of each option token. Pick the highest. **(Log-likelihood often gives 2-3% higher scores)**. |
+| **Run Config** | 5-shot, CoT disabled, Temperature=0, Pass@1, no tools. |
+| **History** | 2020: GPT-3 scored ~43% vs Human Experts ~90%. <br> 2023: GPT-4 reached ~86%. <br> 2024: All frontier models clustered around 86-92%. |
+| **Critical Flaws** | 1. **Label Errors**: ~6.5% of questions have wrong/corrupt answers (so **nobody can score 100%**). <br> 2. **Heavy Contamination**: Public since 2020, so all new models memorize the answers. <br> 3. **Prompt Sensitivity**: Changing the system prompt by 1 word can change scores by 5-10%. |
+| **Current Status** | **Saturated & Retired** (no longer used by frontier labs). |
+
+#### 💻 Code Example: Generation vs. Log-Likelihood Scoring (MMLU)
+
+```python
+# Simulating MMLU's two scoring methods
+
+import numpy as np
+
+# Given a question and 4 options (A, B, C, D)
+options = ["A. Paris", "B. London", "C. Berlin", "D. Madrid"]
+correct_answer = "A"
+
+# --- Method 1: GENERATION (Model prints a character) ---
+model_generated_output = "A"  # Simulated
+if model_generated_output == correct_answer:
+    generation_score = 1.0
+else:
+    generation_score = 0.0
+print(f"Generation Score: {generation_score}")
+
+# --- Method 2: LOG-LIKELIHOOD (Model assigns probabilities to each token) ---
+# Simulating log-probabilities (softmax outputs) for A, B, C, D
+log_probs = {"A": -0.1, "B": -1.5, "C": -2.0, "D": -0.8}  # Higher = more probable
+# We pick the highest probability (A in this case)
+predicted_log_likelihood_answer = max(log_probs, key=log_probs.get)
+print(f"Log-Likelihood Predicted: {predicted_log_likelihood_answer}")
+
+# Key finding: Log-likelihood often gives higher accuracy because the model doesn't have
+# to format the answer correctly. It just has to internally know which token is most likely.
+# This is why GPT-4 scores 84% via generation vs ~87% via log-likelihood!
+```
+
+---
+
+### 2. TruthfulQA – *Testing Honesty & Misconceptions*
+
+| Aspect | Details |
+| :--- | :--- |
+| **Year** | 2021 |
+| **Core Focus** | **Reliability / Truthfulness** (Does the model parrot common internet myths?) |
+| **Dataset** | 817 adversarial questions about **common human misconceptions** (e.g., "Does cracking knuckles cause arthritis?"). |
+| **Scoring Methods** | **Generation**: Model writes the answer. <br> **MC1**: Likelihood of a single correct answer. <br> **MC2**: Sum of likelihoods of *all* correct answers (if multiple correct). **Default is MC2**. |
+| **History** | GPT-3 scored 58% vs Human 94%. <br> **Big Find**: Bigger models were often **less truthful**! (Capability ≠ Alignment). |
+| **Critical Flaws** | Contamination happens during the **Alignment Stage** (RLHF/Instruction Tuning), not just pre-training. |
+| **Current Status** | **Saturated** (replaced by SimpleQA). |
+
+#### 💻 Code Example: TruthfulQA's MC2 Scoring (Multiple True Answers)
+
+```python
+# TruthfulQA has questions where multiple answers can be true.
+# MC2 sums the probabilities assigned to ALL correct answers.
+
+import numpy as np
+
+# Example: Question about a common myth.
+# Simulated log-probabilities assigned by the model to 4 options.
+option_probs = {
+    "true_1": 0.6,  # Correct
+    "true_2": 0.3,  # Correct (multiple correct answers exist)
+    "false_1": 0.05,
+    "false_2": 0.05
+}
+
+# Correct set for this question
+correct_set = ["true_1", "true_2"]
+
+# MC1: Pick the single highest probability (0.6).
+mc1_score = max(option_probs.values())
+print(f"MC1 Score: {mc1_score:.0%}")  # 60%
+
+# MC2: Sum the probabilities of ALL correct answers.
+mc2_score = sum(option_probs[ans] for ans in correct_set)
+print(f"MC2 Score: {mc2_score:.0%}")  # 90% (0.6 + 0.3)
+
+# Insight: If a model is only 60% sure about the single best answer, 
+# but 90% sure that the answer lies within the correct set, MC2 rewards this nuance.
+```
+
+---
+
+### 3. AGI Eval – *Human Exam Benchmarks*
+
+| Aspect | Details |
+| :--- | :--- |
+| **Year** | 2023 |
+| **Core Focus** | Comparing LLMs directly to **Human exam takers** (SAT, LSAT, Gaokao, etc.). |
+| **Dataset** | 8000+ questions from 20 real human exams. |
+| **Key Feature** | **Bilingual** (English + Chinese). Provides a real human baseline (Avg human: 67%, Top human: 91%). |
+| **Critical Flaw** | Passing an exam does **NOT** mean achieving AGI. It tests memorization/retrieval, not long-horizon reasoning or tool use. |
+| **Current Status** | **Saturated** (models now match/exceed top human scores). |
+
+---
+
+### 4. GPQA (Google-Proof Q&A) – *Testing Depth of Knowledge*
+
+| Aspect | Details |
+| :--- | :--- |
+| **Year** | 2023 |
+| **Core Focus** | **Depth** of Knowledge (PhD-level, extremely hard questions). |
+| **Dataset** | Physics, Chemistry, Biology questions. Subsets: Main (443), Extended (546), **Diamond (198)** – the hardest. |
+| **Key Feature** | **Google-Proof**: Even if you give a non-expert 30 mins and Google, they cannot solve it. Validated by domain experts. |
+| **History** | GPT-4 scored 39% initially. O1 (reasoning model) hit 78% in 2024. Grok 4 hit ~87% in 2025. |
+| **Critical Flaw** | Very few questions (only 198 in Diamond), lowering statistical confidence. Only covers 3 subjects (Physics, Chem, Bio). |
+| **Current Status** | **Near Saturation** (approaching 80-90%). |
+
+---
+
+### 5. MMLU Pro – *The Fixed Version of MMLU*
+
+| Aspect | Details |
+| :--- | :--- |
+| **Year** | 2024 |
+| **Core Focus** | Repair the flaws of MMLU. |
+| **Key Changes** | 1. **4 options → 10 options** (harder to guess via elimination). <br> 2. Removed trivia/noisy questions, added **Reasoning-based** questions. <br> 3. Reduced from 57 to 14 balanced subjects. |
+| **Effect** | Reasoning models scored **20 points higher** than non-reasoning models, proving it tests thinking, not just recall. |
+| **Critical Flaw** | No human baseline provided. Questions are sourced from public STEM problems (contamination risk). |
+| **Current Status** | **Near Saturation** (models hitting 80-90%). |
+
+#### 💻 Code Example: Why 10 Options > 4 Options (Elimination Strategy)
+
+```python
+import random
+
+# Simulating random guessing on 4 vs 10 options
+
+def simulate_guessing(num_options, trials=10000):
+    correct = 0
+    for _ in range(trials):
+        guess = random.randint(1, num_options)
+        answer = random.randint(1, num_options)
+        if guess == answer:
+            correct += 1
+    return correct / trials
+
+guess_rate_4 = simulate_guessing(4)  # Random chance = 25%
+guess_rate_10 = simulate_guessing(10) # Random chance = 10%
+
+print(f"Random chance with 4 options: {guess_rate_4 * 100:.0f}%")
+print(f"Random chance with 10 options: {guess_rate_10 * 100:.0f}%")
+
+# Insight: With 10 options, a model cannot rely on "intelligent elimination" as easily.
+# It must ACTUALLY KNOW the answer or reason deeply.
+```
+
+---
+
+### 6. SimpleQA – *Open-Ended Short Answers + Calibration*
+
+| Aspect | Details |
+| :--- | :--- |
+| **Year** | 2024 (OpenAI) |
+| **Core Focus** | **Factuality + Calibration** (Does the model know what it *doesn't* know?) |
+| **Dataset** | 4000+ short fact-seeking questions that **GPT-4 failed to answer** initially. |
+| **Key Feature** | **NO MULTIPLE CHOICE**. The model must generate the answer freely. |
+| **Scoring** | 3 categories: **Correct**, **Incorrect**, or **Not Attempted** (if the model says "I don't know"). |
+| **History** | GPT-4 scored ~38%. O1 scored ~42%. GPT-4.5 scored ~62%. |
+| **Critical Flaw** | LLM-as-a-judge is used for grading, which evolves over time (hard to compare scores across years). Also, "stale" answers (facts change over time). |
+| **Current Status** | **Active** (far from saturation). |
+
+#### 💻 Code Example: Simulating SimpleQA's "Calibration" & Refusal Mechanism
+
+```python
+# SimpleQA tracks if the model is "Humble" (knows its limits)
+
+def simpleqa_scoring_model(model_response, ground_truth):
+    # Scenario 1: Model gives the exact correct answer
+    if model_response.strip().lower() == ground_truth.lower():
+        return "Correct"
+    
+    # Scenario 2: Model admits ignorance (GOOD! No hallucination)
+    elif "don't know" in model_response.lower() or "not sure" in model_response.lower():
+        return "Not Attempted (Good Calibration)"
+    
+    # Scenario 3: Model guesses incorrectly (BAD hallucination)
+    else:
+        return "Incorrect (Hallucination)"
+
+# Test cases
+responses = [
+    ("Albert Einstein", "Albert Einstein"),           # Correct
+    ("I don't know who won that year.", "Marie Curie"), # Refused, Good!
+    ("Isaac Newton", "Marie Curie")                    # Wrong guess, Bad!
+]
+
+for resp, truth in zip(responses, ["Correct", "Not Attempted", "Incorrect"]):
+    print(simpleqa_scoring_model(resp, truth))
+
+# Insight: SimpleQA penalizes the model for guessing when it doesn't know.
+# This separates truly knowledgeable models from overconfident hallucinators.
+```
+
+---
+
+### 7. HLE (Humanity's Last Exam) – *The Ultimate Knowledge Test*
+
+| Aspect | Details |
+| :--- | :--- |
+| **Year** | 2025 |
+| **Core Focus** | **Breadth × Depth** (Combines MMLU's breadth and GPQA's depth). |
+| **Dataset** | ~2,500 expert-written questions across **100+ subjects** (from Classics to Rocket Engineering). |
+| **Key Features** | 1. **10% Multimodal** (includes images/charts). <br> 2. **Private Held-Out Set** (not publicly available) – **prevents contamination!** <br> 3. Tests **Accuracy + Calibration** (asks models for confidence scores). |
+| **Scoring** | Accuracy + RMSE of confidence scores. |
+| **History** | 2025: Grok 4 ~24%, GPT-5 ~25%, Gemini ~38%. <br> 2026: Frontier models still struggling. |
+| **Philosophy** | If models ace this (breadth + depth across 100 subjects), we declare victory on closed-ended knowledge tests and move to **open-ended agentic tasks**. |
+| **Critical Flaw** | LLM-as-a-judge grading errors, selection bias (questions filtered to stump older models). |
+| **Current Status** | **Active** (The current State-of-the-Art benchmark). |
+
+#### 💻 Code Example: HLE's Breadth + Depth + Calibration
+
+```python
+# HLE combines Breadth (100 subjects) and Depth (expert level).
+# It also asks the model for its confidence.
+
+def hle_evaluate(model_answer, ground_truth, model_confidence):
+    # 1. Check correctness
+    if model_answer == ground_truth:
+        correctness = 1.0
+    else:
+        correctness = 0.0
+    
+    # 2. Check Calibration (Confidence should match accuracy)
+    # If model says 90% confident but gets it wrong -> bad calibration.
+    calibration_error = abs(correctness - model_confidence)
+    
+    return {
+        "correct": correctness,
+        "confidence": model_confidence,
+        "calibration_error": calibration_error
+    }
+
+# Test: Model gets it right but is unsure (under-confident)
+result = hle_evaluate("Paris", "Paris", 0.6)
+print(result) # correct: 1.0, confidence: 0.6, error: 0.4
+
+# Test: Model gets it wrong but is over-confident (over-confident -> hallucination risk)
+result = hle_evaluate("London", "Paris", 0.95)
+print(result) # correct: 0.0, confidence: 0.95, error: 0.95
+```
+
+---
+
+## 📝 Part 3: Summary of the Benchmark Lifecycle
+
+A crucial takeaway from the instructor is the **"Cat & Mouse" lifecycle** of every benchmark:
+
+1. **Arrival**: A new benchmark is released. Models score poorly (e.g., 30-40%).
+2. **Improvement**: Over 1-2 years, models get smarter (bigger scale, better alignment).
+3. **Saturation**: Models score 80-90%+. All models cluster together.
+4. **Retirement**: The benchmark is discarded. A newer, harder one replaces it.
+5. **Repeat**: The cycle continues.
+
+| Benchmark | Year | Core Focus | Scoring Quirk | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **MMLU** | 2020 | Breadth | Log-likelihood vs Generation | ❌ Retired/Saturated |
+| **TruthfulQA** | 2021 | Reliability | MC2 (Sum of true probs) | ❌ Retired/Saturated |
+| **AGI Eval** | 2023 | Human Exams | Bilingual (EN/CN) | ❌ Retired/Saturated |
+| **GPQA** | 2023 | Depth | Diamond subset (198 Qs) | ⚠️ Near Saturation |
+| **MMLU Pro** | 2024 | Fixed MMLU | 10 Options + Reasoning | ⚠️ Near Saturation |
+| **SimpleQA** | 2024 | Calibration | Open-ended + Refusal | ✅ Active |
+| **HLE** | 2025 | Breadth x Depth | Private set + Multimodal | ✅ Active (SOTA) |
+
+---
+
+## 🧠 Final Important Pointers (The "AI Engineer" Mindset)
+
+1. **Don't Trust Single Numbers**: A model scoring 90% on MMLU doesn't mean it's 90% "smart". Check sub-scores (Physics vs. Economics) or cross-check with SimpleQA/HLE.
+2. **Contamination is Real**: Public benchmarks are dangerous to use for comparison because models memorize them.
+3. **Calibration Matters**: A model that says "I don't know" is better than one that hallucinates confidently. SimpleQA and HLE measure this.
+4. **Reasoning ≠ Memorization**: MMLU Pro and HLE force models to *think* rather than just recall.
+5. **The Final Frontier**: If models ace HLE, we stop testing closed knowledge and shift to testing agents (tools, long-horizon planning).
+
+---
+
+## 010. How to Use LLM Leaderboards (30:07)
 
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
