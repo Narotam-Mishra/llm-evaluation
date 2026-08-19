@@ -2646,6 +2646,218 @@ A crucial takeaway from the instructor is the **"Cat & Mouse" lifecycle** of eve
 
 ## 010. How to Use LLM Leaderboards (30:07)
 
+This tutorial guide to **LLM Leaderboards** – how they work, why they exist, the different types, their hidden pitfalls, and the **step-by-step framework** every AI Engineer should follow to use them correctly (without falling into the "leaderboard trap").
+
+---
+
+## 📌 Part 1: What is an LLM Leaderboard? (Definition)
+
+**Definition**: An LLM Leaderboard is a **public ranking table** that shows how different LLMs perform on a common set of evaluations (benchmarks).
+
+**Analogy**: 
+- **Benchmark** = The "Exam Paper" (e.g., MMLU, HLE).
+- **Leaderboard** = The "Result Sheet" showing who got the highest marks.
+
+---
+
+## 🎯 Part 2: Why Do Leaderboards Exist? (4 Key Reasons)
+
+1. **Common Reference**: Compare models from different labs (OpenAI vs. Google vs. Anthropic) on a level playing field.
+2. **Trust (Third-Party)**: Leaderboards run by independent third parties are more trustworthy than a company's self-reported scores.
+3. **Cost/Time Saver**: You cannot run evaluations on every model in existence (too expensive/time-consuming). Leaderboards filter the pool for you.
+4. **Discovery**: You find hidden gems – small, cheap models that punch above their weight in specific tasks.
+
+---
+
+## 👥 Part 3: Who Uses Leaderboards?
+
+| Stakeholder | How They Use It |
+| :--- | :--- |
+| **AI Engineers (You!)** | Shortlist candidate models for their specific application (e.g., "find models good at math"). |
+| **Frontier Labs** | Strategic planning – if their new model doesn't beat competitors, they delay the release. Often release "Stealth Models" (like *Nano Banana*) to test the waters before revealing it's theirs. |
+| **Researchers** | Identify saturated benchmarks (no progress) vs. active frontiers (new research directions). |
+| **Policymakers/Safety Institutes** | Monitor if any model becomes dangerously powerful (e.g., triggering government intervention like with some releases). |
+| **Open-Source Community** | Discover new innovative labs/models that suddenly pop up to the top. |
+
+---
+
+## 📂 Part 4: The 4 Types of Leaderboards
+
+| Type | What it does | Example |
+| :--- | :--- | :--- |
+| **1. Benchmark-Specific** | Ranks models on **only one** benchmark (gives a narrow view). | HLE's Official Leaderboard |
+| **2. Multi-Benchmark / Aggregate** | Combines scores from **multiple benchmarks** into a single overall score. Also provides cost, latency, and speed. | **LiveBench**, **Artificial Analysis** (most useful). |
+| **3. Human Preference** | Users vote on which model's response they prefer (Blind A/B testing). | **LMSYS Chatbot Arena** (Elo rating system). |
+| **4. Application-Specific** | Focuses on a specific domain (e.g., coding, function calling, SQL). | **Berkeley Function Calling Leaderboard**. |
+
+### 💻 Code Example 1: Simulating a "Multi-Benchmark" Aggregated Score
+
+```python
+# Simulating how Artificial Analysis / LiveBench creates a composite score
+
+benchmark_scores = {
+    "Model_A": {"MMLU": 90, "GSM8K": 92, "HumanEval": 85, "Latency": 1.2},
+    "Model_B": {"MMLU": 88, "GSM8K": 95, "HumanEval": 82, "Latency": 0.8},
+    "Model_C": {"MMLU": 85, "GSM8K": 80, "HumanEval": 95, "Latency": 2.5},
+}
+
+# The leaderboard uses a secret weighting formula!
+weights = {"MMLU": 0.4, "GSM8K": 0.3, "HumanEval": 0.3}
+
+def calculate_composite_score(model_scores, weights):
+    score = 0
+    for bench, weight in weights.items():
+        score += model_scores[bench] * weight
+    return round(score, 2)
+
+for model, scores in benchmark_scores.items():
+    composite = calculate_composite_score(scores, weights)
+    print(f"{model} Composite Score: {composite}")
+
+# Output:
+# Model_A: 89.1
+# Model_B: 88.3
+# Model_C: 85.5
+
+# IMPORTANT: If the weights changed, Model_B might win!
+# This shows why we need to understand HOW the leaderboard is calculated.
+```
+
+### 💻 Code Example 2: Simulating "Human Preference" (ELO Rating / Voting)
+
+```python
+# Simulating LMSYS Chatbot Arena logic
+
+import random
+
+class ArenaMatch:
+    def __init__(self, model_a, model_b):
+        self.model_a = model_a
+        self.model_b = model_b
+        # Simulate users preferring well-formatted, long, confident responses.
+        # Model_A has better formatting, Model_B is more factual but dry.
+    
+    def simulate_user_vote(self):
+        # Human bias: Prettier formatting gets votes even if content is similar.
+        if self.model_a == "GPT-4 (Verbose)":
+            return "A"  # Humans often choose the longer, well-structured one.
+        else:
+            return random.choice(["A", "B"])  # Else random.
+
+# Over thousands of votes, "Friendly/Verbose" models rank higher 
+# than "Dry/Factual" ones, even if the factual accuracy is lower.
+```
+
+---
+
+## ⚠️ Part 5: 7 Critical Pitfalls – Why You CANNOT Blindly Trust Leaderboards
+
+1. **Benchmark Performance ≠ Real-World Performance**: Benchmarks are clean; real-world data is messy (ambiguous queries, missing info, edge cases).
+2. **Contamination**: Models memorize public benchmark answers. High scores are often due to memorization, not reasoning.
+3. **Goodhart's Law**: *"When a measure becomes a target, it ceases to be a good measure."* Models are trained specifically to win the leaderboard, sacrificing actual real-world usefulness (like companies optimizing only for fuel mileage and ruining the driving experience).
+4. **Hidden Weighting/Aggregation**: How is the "Overall" score calculated? Which benchmarks are included or excluded? It's often a black box.
+5. **Statistically Insignificant Differences**: A 0.2% difference in score doesn't mean one model is better. They are functionally identical.
+6. **Human Bias**: In human-vote leaderboards, people prefer longer, prettier, more entertaining answers—not necessarily the *most accurate* ones.
+7. **Stale/Self-Reported Data**: Leaderboards often aren't updated with the newest models, or companies cherry-pick favorable scores to report.
+
+### 💻 Code Example 3: Simulating Goodhart's Law in Action
+
+```python
+# Scenario: A leaderboard rewards "Verbose Answers".
+
+def evaluate_model_quality(model, is_verbose):
+    # Simulated real-world metrics
+    factual_accuracy = 85  # Baseline
+    
+    # The developer optimized the model to be verbose to get votes.
+    if is_verbose:
+        # Goodhart's Law: Optimizing for verbosity hurts factual accuracy!
+        factual_accuracy -= 15  # Drops because it starts generating "fluff" and hallucinated details.
+    
+    # However, the leaderboard only checks "Length" and "Formatting"...
+    leaderboard_score = 95 if is_verbose else 70
+    
+    return {
+        "Leaderboard_Score": leaderboard_score,
+        "True_Factual_Accuracy": factual_accuracy
+    }
+
+result_verbose = evaluate_model_quality(model="Optimized_for_Leaderboard", is_verbose=True)
+result_dry = evaluate_model_quality(model="Not_Optimized", is_verbose=False)
+
+print(f"Verbose Model: LB={result_verbose['Leaderboard_Score']}, Fact={result_verbose['True_Factual_Accuracy']}")
+print(f"Dry Model: LB={result_dry['Leaderboard_Score']}, Fact={result_dry['True_Factual_Accuracy']}")
+
+# Output:
+# Verbose Model: LB=95, Fact=70  (Wins leaderboard, loses in reality)
+# Dry Model: LB=70, Fact=85      (Loses leaderboard, better in reality)
+```
+
+---
+
+## 🛠️ Part 6: The AI Engineer's 5-Step Framework (How to Use Leaderboards Correctly)
+
+**The Golden Rule**: *Leaderboards are a **Filtering Tool**, NOT a **Decision Tool**.*
+
+| Step | Action | Details |
+| :--- | :--- | :--- |
+| **1. Define Constraints** | Write down your app's needs: latency budget, cost tolerance, context window, deployment (cloud vs. on-premise). | If you need on-premise, ignore proprietary models (Claude/GPT) completely. |
+| **2. Choose the Right Board** | Pick a leaderboard for your **specific domain**. | Building a Chatbot? → LMSYS Arena. Building an Agent? → Berkeley Function Calling. Building RAG? → MTEB (Embeddings). |
+| **3. Read Critically** | Check the fine print. Is it saturated? Is there a private test set? What's the confidence interval? | If scores are 90-95% clustered, the benchmark is dead. |
+| **4. Shortlist (Filter)** | Select **Top 3 to 5** models that pass your constraints. | Narrow down from 100 models to a handful. |
+| **5. Run YOUR Custom Eval** | Run your own **custom evaluations** (golden dataset) on these 3-5 candidates. | **This is where you make the final decision.** |
+
+### 💻 Code Example 4: The "Filter, Don't Decide" Strategy
+
+```python
+# Step 1: 100 models exist.
+all_models = [f"Model_{i}" for i in range(100)]
+
+# Step 2: Filter using Leaderboard (Speed constraint: Latency < 0.8s).
+# Simulating a filter based on leaderboard data.
+leaderboard_data = {m: {"latency": round(0.5 + (i*0.05), 2), "score": 80 + (i*0.1)} for i, m in enumerate(all_models)}
+
+# Filter: Keep only models with latency < 0.8 seconds.
+shortlisted = [m for m in all_models if leaderboard_data[m]["latency"] < 0.8]
+print(f"Leaderboard filtered 100 models down to {len(shortlisted)}.")
+
+# Step 3: Run YOUR Custom Eval on the shortlist.
+# Simulating a custom golden dataset (e.g., 500 internal support tickets).
+def run_custom_eval(model, custom_data):
+    # Simulate accuracy on YOUR specific data.
+    base = leaderboard_data[model]["score"]
+    # Real-world data is messy, so performance drops compared to the leaderboard.
+    custom_score = max(65, base - 15) 
+    return custom_score
+
+for model in shortlisted[:5]:  # Pick the top 5 from the shortlist
+    print(f"{model}: Leaderboard={leaderboard_data[model]['score']}% | My Custom Data={run_custom_eval(model, [])}%")
+
+# The model with the highest LEADERBOARD score might NOT be the best on YOUR custom data!
+# You pick based on YOUR custom eval results.
+```
+
+---
+
+## 📝 Final Summary Table
+
+| Concept | Key Takeaway |
+| :--- | :--- |
+| **Definition** | Leaderboards = Public ranking tables of LLMs on benchmarks. |
+| **Why Exist** | Common reference, trust, cost-saving, discovery. |
+| **4 Types** | Benchmark-Specific, Multi-Benchmark, Human-Preference, Application-Specific. |
+| **Pitfall 1** | Leaderboard scores are inflated by contamination/memorization. |
+| **Pitfall 2** | Goodhart's Law – Models optimize for the test, not the real world. |
+| **Pitfall 3** | Small numerical differences are statistically meaningless. |
+| **The Golden Rule** | Leaderboards are a **filtering tool** (go from 100 → 5 models), NOT a decision tool. |
+| **Final Step** | **Always** run your own custom eval on the final candidates to make the real choice. |
+
+**Bottom Line**: Never blindly pick the "#1" model on a leaderboard. Use the leaderboard to eliminate the clearly bad/poorly-suited models, then test the remaining few on your actual production data. That's how a professional AI Engineer makes decisions. 🚀
+
+---
+
+## 011. Selecting the Right LLM for Your AI App: Running Custom Model Evals (01:56:52)
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 
