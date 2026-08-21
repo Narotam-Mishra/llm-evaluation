@@ -3040,8 +3040,11 @@ After the cost analysis, here is the full list of constraints gathered:
 | **Correctness** | Absolute must for this app (Text-to-SQL accuracy must be high to avoid public backlash). |
 | **Leaderboards** | Used ONLY to filter 100 models down to 5-10. They are NOT the final decision-maker. |
 
-
 ---
+
+- [Best AI for Coding](https://llm-stats.com/leaderboards/best-ai-for-coding)
+
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 
