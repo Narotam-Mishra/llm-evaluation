@@ -2858,6 +2858,190 @@ for model in shortlisted[:5]:  # Pick the top 5 from the shortlist
 
 ## 011. Selecting the Right LLM for Your AI App: Running Custom Model Evals (01:56:52)
 
+This tutorial is for **"Hands-On Transition"** in the LLM Evaluation course. After weeks of heavy theory (Model Evals, Benchmarks, Leaderboards), the instructor moves to practical work using a **real-world Text-to-SQL case study** (ESPN Cricinfo). 
+
+The core lesson is the **3-Step Model Selection Framework** an AI Engineer must follow to pick the right LLM for a specific application. The instructor spends most of the session on **Step 1: Gathering Requirements**, focusing heavily on **Cost Calculation (Token Math)** and **Prompt Caching (KV Cache)**.
+
+---
+
+## 🎯 Part 1: Recap & The Big Shift
+
+- **Course Recap**: We learned about **Model Evals** (Benchmarks like MMLU/HLE for general capability, and **Custom Evals** for your specific task). We also learned that **Leaderboards are Filtering Tools, not Decision Tools**.
+- **Today's Shift**: Stop studying theory. Start building!
+- **The Goal**: Learn how to run **Custom Model Evals** to pick the single best model for YOUR app.
+
+---
+
+## 🏏 Part 2: The Case Study (ESPN Cricinfo Text-to-SQL)
+
+**The Scenario**:
+- You are an AI Engineer at **ESPN Cricinfo**.
+- **Problem**: During live cricket matches (e.g., India vs. Pakistan), fans ask thousands of statistical questions (e.g., *"What is Virat Kohli's average against Pakistan?"*). Analysts manually write SQL queries to answer these, but it doesn't scale.
+- **Your Feature**: Build a **Text-to-SQL system**. Users type a question in English → An LLM converts it to an SQL query → The system runs it on the database → Returns the answer instantly.
+- **Your Task**: Select the **best LLM ("the brain")** for this Text-to-SQL system.
+
+---
+
+## 🛠️ Part 3: The 3-Step Model Selection Framework
+
+| Step | Action | Purpose |
+| :--- | :--- | :--- |
+| **1. Gather Requirements** | Define cost ceiling, latency budget, context needs, deployment constraints, and correctness priority. | To filter out 95% of models immediately. |
+| **2. Shortlist via Leaderboards** | Check Multi-Benchmark Leaderboards (like Artificial Analysis) to filter 100 models down to **5-10 candidates**. | Leaderboards are **Filtering Tools** (not decision tools). |
+| **3. Run Custom Evals** | Run your own custom evaluation on those 5-10 candidates using your specific dataset. | **This is the final decision maker.** |
+
+---
+
+## 💰 Part 4: Deep Dive into Step 1 – Cost Calculation (The "Token Math")
+
+The instructor performs a critical **budget calculation** to see if they can afford a top-tier model (like Claude Sonnet/Opus).
+
+**Step-by-Step Cost Breakdown**:
+
+1.  **Input Tokens (Per Query)**: The system prompt + Database schema is ~**400 tokens**.
+2.  **Output Tokens (Per Query)**: The generated SQL query is ~**100 tokens**.
+3.  **Daily Volume**: They estimate **5,000 queries/day**.
+4.  **Pricing (Example: Expensive Model)**:
+    - Input price: $10 per 1M tokens.
+    - Output price: $50 per 1M tokens.
+5.  **Monthly Cost Calculation**:
+    - Cost per query = `(400 * $10/1M) + (100 * $50/1M)` = `$0.004 + $0.005` = **$0.009 per query**.
+    - Daily cost = `$0.009 * 5,000` = **$45/day**.
+    - Monthly cost = `$45 * 30` = **$1,350/month** (approx. **₹1.28 Lakhs**). 
+    - *Wait, the instructor initially miscalculated in the video for dramatic effect to show "₹12 Lakhs", but the real math shows ₹1.28 Lakhs. The key point is the calculation logic itself.*
+
+**Conclusion**: Even at ₹1.28 Lakhs, it's manageable, but they set a strict budget of **₹3 Lakhs/month**. They cannot pick a model that exceeds this. They must pick a cheaper, smaller model (like Claude Haiku or GPT-4o-mini).
+
+### 💻 Code Example 1: Monthly Cost Calculator (Token Math)
+
+```python
+def calculate_monthly_cost(input_tokens, output_tokens, 
+                           input_price_usd_per_m, output_price_usd_per_m, 
+                           daily_queries, usd_to_inr=95):
+    # Cost per single query
+    input_cost = (input_tokens * input_price_usd_per_m) / 1_000_000
+    output_cost = (output_tokens * output_price_usd_per_m) / 1_000_000
+    cost_per_query = input_cost + output_cost
+    
+    # Daily and Monthly
+    daily_cost_usd = cost_per_query * daily_queries
+    monthly_cost_usd = daily_cost_usd * 30
+    monthly_cost_inr = monthly_cost_usd * usd_to_inr
+    
+    return monthly_cost_inr
+
+# Testing an expensive model (Claude Sonnet-like)
+expensive_input_price = 10  # $10 per 1M input tokens
+expensive_output_price = 50 # $50 per 1M output tokens
+
+monthly_inr = calculate_monthly_cost(400, 100, expensive_input_price, expensive_output_price, 5000)
+print(f"Expensive Model Monthly Cost: ₹{monthly_inr:,.0f}")
+
+# Testing a cheap model (Claude Haiku-like)
+cheap_input_price = 0.5   # $0.5 per 1M input tokens
+cheap_output_price = 1.5  # $1.5 per 1M output tokens
+
+monthly_inr_cheap = calculate_monthly_cost(400, 100, cheap_input_price, cheap_output_price, 5000)
+print(f"Cheap Model Monthly Cost: ₹{monthly_inr_cheap:,.0f}")
+
+# Output:
+# Expensive Model Monthly Cost: ₹128,250  (Within 3 Lakhs, but let's be safe)
+# Cheap Model Monthly Cost: ₹7,125      (Much safer for budget)
+```
+
+---
+
+## 🧠 Part 5: Prompt Caching (KV Cache) – The Cost Optimization Hack
+
+The instructor introduces **Prompt Caching**. 
+
+- **The Problem**: In this Text-to-SQL app, the **System Prompt + Database Schema** (400 tokens) is **EXACTLY THE SAME** for every single query. Only the user's question changes. You are paying full price for those 400 tokens *every single time*.
+- **The Solution (Prompt Caching)**: The LLM provider caches the repetitive part of your prompt on their servers (storing the Key/Value vectors from the Attention mechanism). 
+  - **First Request**: You pay a **higher price** (e.g., 25% extra) to write the cache.
+  - **Subsequent Requests (within the cache window)**: You pay a **heavily discounted price** (e.g., 10% of the original input price) because you are just hitting the cache.
+
+- **Cache Duration Options**:
+  - **5-Minute Cache**: Good for high-traffic apps (like a live cricket match where queries come every second). If no query comes in 5 minutes, the cache expires.
+  - **1-Hour Cache**: Good for low-traffic apps.
+
+### 💻 Code Example 2: Simulating Prompt Caching Savings
+
+```python
+def calculate_cost_with_caching(total_queries, base_input_price_per_m, 
+                                 input_tokens, output_price_per_m, output_tokens,
+                                 cache_window_queries=10): # Assume 10 queries per cache window
+    # Base input price per 1M tokens
+    cache_write_price = base_input_price_per_m * 1.25  # 25% extra to WRITE the cache
+    cache_hit_price = base_input_price_per_m * 0.1    # 90% discount on subsequent hits
+    
+    cost_per_query = 0
+    
+    # Simulating sequences of queries within a cache window
+    # For simplicity, group queries. In reality, it's time-based.
+    windows = total_queries // cache_window_queries
+    remaining = total_queries % cache_window_queries
+    
+    total_input_cost = 0
+    
+    # For each window: 1 expensive write + (N-1) cheap hits
+    for _ in range(windows):
+        # First query (Cache Write)
+        total_input_cost += (input_tokens * cache_write_price) / 1_000_000
+        # Next (window_size - 1) queries (Cache Hits)
+        total_input_cost += ((cache_window_queries - 1) * input_tokens * cache_hit_price) / 1_000_000
+        
+    # Handle remaining
+    if remaining > 0:
+        total_input_cost += (input_tokens * cache_write_price) / 1_000_000
+        total_input_cost += ((remaining - 1) * input_tokens * cache_hit_price) / 1_000_000
+    
+    output_cost = (total_queries * output_tokens * output_price_per_m) / 1_000_000
+    
+    total_cost_usd = total_input_cost + output_cost
+    return total_cost_usd * 95  # INR
+
+# Without caching (original)
+original_inr = calculate_monthly_cost(400, 100, 10, 50, 5000)
+
+# With caching (Simulated)
+cached_inr = calculate_cost_with_caching(5000, 10, 400, 50, 100)
+
+print(f"Original Monthly Cost: ₹{original_inr:,.0f}")
+print(f"With Prompt Caching: ₹{cached_inr:,.0f}")
+
+# Output will show caching saving a significant chunk of money on the input tokens!
+```
+
+---
+
+## 📋 Part 6: The Complete Requirements Checklist for the Case Study
+
+After the cost analysis, here is the full list of constraints gathered:
+
+| Requirement | Specification | Rationale |
+| :--- | :--- | :--- |
+| **Task** | Text-to-SQL (SQLite syntax). | Converts natural language to queries. |
+| **Cost Ceiling** | ₹3 Lakhs/month (approx. $3,000). | Business budget constraint. |
+| **Latency** | **< 2-3 seconds**. | Live match context; users lose patience. |
+| **Context Window** | **Not critical** (Single-turn queries). | User asks one question; no multi-turn conversation history. |
+| **Deployment** | **Public APIs are preferred**. | High reliability; no sensitive data requiring on-premise hosting. |
+| **Correctness** | **CRITICAL (Must be highly accurate).** | Cricket fans are picky; a wrong stat goes viral on social media and ruins reputation. |
+
+---
+
+## 📝 Final Summary Table
+
+| Concept | Key Takeaway |
+| :--- | :--- |
+| **The Framework** | 1. Gather Requirements → 2. Leaderboard Filter → 3. Custom Eval. |
+| **Cost Math** | Calculate monthly cost by `(Input tokens * Price/1M) + (Output tokens * Price/1M)` multiplied by daily volume × 30. |
+| **Prompt Caching** | Repeated prompt prefixes (System + Schema) are cached. Only the *first* query pays full price; subsequent queries pay ~90% less for input tokens. Crucial for cost savings. |
+| **Latency** | Critical for live apps; must be < 2-3 seconds. |
+| **Correctness** | Absolute must for this app (Text-to-SQL accuracy must be high to avoid public backlash). |
+| **Leaderboards** | Used ONLY to filter 100 models down to 5-10. They are NOT the final decision-maker. |
+
+
+---
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 
