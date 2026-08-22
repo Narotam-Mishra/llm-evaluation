@@ -3042,8 +3042,206 @@ After the cost analysis, here is the full list of constraints gathered:
 
 ---
 
+This tutorial covers the **hands-on implementation of Steps 2 and 3** of the Model Selection Framework. 
+
+**Step 2**: The instructor uses a **Coding Leaderboard** (as a proxy for SQL capability) to filter 100+ models down to 5 candidates based on **cost and composite accuracy/speed scores**.
+
+**Step 3**: He builds a **Custom Evaluation Pipeline** from scratch (Golden Dataset, SQLite DB, and a smart result-set evaluator) and runs live tests on the 5 candidates to pick the final winner.
+
+---
+
+## 🎯 Part 1: Step 2 – Leaderboard Shortlisting (The Filtration)
+
+### The "Filtering" Process
+The goal is to go from ~146 models to 5-10 candidates based on requirements.
+
+1.  **Rejecting Specific SQL Leaderboards**: The instructor looked for Text-to-SQL leaderboards (e.g., Bird-SQL, Spider) but rejected them because they were **outdated** (old models) or included obscure "fine-tuned" models that aren't usable via public API.
+2.  **Using a Coding Leaderboard as a Proxy**: Since SQL generation is essentially a coding task, he used `llmstats.com` (a general coding leaderboard) with **146 models**.
+3.  **Cost Filter**: He calculated the monthly cost for each model (using `5000 queries/day`, `400 input tokens`, `100 output tokens`, and a **5 Lakh/month budget**). Removed all models exceeding ₹5 Lakhs.
+4.  **Normalization & Weighted Composite Score**: For the remaining models, he normalized their **Coding Accuracy** and **Speed** (characters/second). He gave **90% weight to accuracy** and **10% to speed** (since SQL queries are short, speed matters less). 
+5.  **Final Shortlist**: He picked the **Top 5** candidates:
+    - GPT-5.6 Tera (Expensive, high accuracy)
+    - Kimi K3 (Hype model, cheap)
+    - Grok 4.5 (Mid-cost, fast)
+    - Claude Sonnet 5 (Mid-cost, reliable)
+    - Minimax M3 (Cheap, Chinese model)
+
+### 💻 Code Example 1: Blended Pricing & Composite Score Calculation
+
+```python
+# 1. BLENDED PRICING (How leaderboards show a single price)
+# Leaderboard assumes a 4:1 Input:Output ratio for costs.
+input_price = 10   # $ per 1M tokens (Claude Sonnet)
+output_price = 50  # $ per 1M tokens
+blended_price = (4 * input_price + 1 * output_price) / 5
+print(f"Blended Price per 1M tokens: ${blended_price}") # Output: $18
+
+# 2. MONTHLY COST CALCULATION
+def calculate_monthly_cost(blended_price_per_mil, input_tokens, output_tokens, daily_queries, usd_to_inr=95):
+    total_tokens_per_query = input_tokens + output_tokens
+    cost_per_query_usd = (total_tokens_per_query * blended_price_per_mil) / 1_000_000
+    monthly_cost_usd = cost_per_query_usd * daily_queries * 30
+    return monthly_cost_usd * usd_to_inr
+
+monthly_inr = calculate_monthly_cost(blended_price=18, input_tokens=400, output_tokens=100, daily_queries=5000)
+print(f"Monthly Cost: ₹{monthly_inr:,.0f}") # Output: ₹128,250
+
+# 3. COMPOSITE SCORE (Weighted: 90% Accuracy, 10% Speed)
+def normalize(value, min_val, max_val):
+    return (value - min_val) / (max_val - min_val)
+
+# Simulated normalized values (0 to 1)
+model_accuracy = 0.95
+model_speed = 0.50  # Slow, but we don't care much
+
+composite_score = (model_accuracy * 0.9) + (model_speed * 0.1)
+print(f"Composite Score: {composite_score:.3f}") # Output: 0.905
+
+# The instructor used this formula to rank and shortlist candidates.
+```
+
+---
+
+## 🔧 Part 2: Step 3 – The Custom Evaluation Pipeline
+
+The instructor built an end-to-end pipeline to test the 5 shortlisted models on their *actual* data (Text-to-SQL).
+
+### A. Infrastructure Setup
+1.  **Database**: He downloaded IPL (cricket) data from Kaggle (2008-2024) and filtered it to **2020-2024** for simplicity. He loaded it into a **SQLite** database (`matches` and `deliveries` tables).
+2.  **Schema Extraction**: He wrote a script to extract the database schema (table names, column names, data types) and save it as `schema.sql`. This schema is injected into the **System Prompt** for the LLM.
+
+### 💻 Code Example 2: System Prompt Construction (Injection)
+
+```python
+# The system prompt sent to every model on every query.
+system_prompt_template = """
+You are a Text-to-SQL generator for a cricket database (IPL 2020-2024).
+Given the schema below, convert the user's question into a single SQLite query.
+
+SCHEMA:
+{table_schema}
+
+USER QUESTION: {question}
+SQL QUERY:
+"""
+
+# The schema is static (400 tokens), only the question changes.
+```
+
+### B. Golden Dataset Creation
+1.  **Purpose**: A set of questions with their **correct SQL queries** (manually validated). This is the "Answer Key".
+2.  **Strategy**: He generated **20 "Hard" questions** (using an LLM) covering complex joins, aggregations, and subqueries. He manually validated them against the DB to ensure they ran correctly and returned the expected results.
+3.  **Structure**: `golden_hard.csv` containing columns: `question`, `golden_query`, `is_order_sensitive` (True/False).
+
+### 💻 Code Example 3: Golden Dataset Structure
+
+```python
+# The Golden Dataset (Ground Truth)
+golden_data = [
+    {
+        "id": 1,
+        "question": "What is the average number of runs scored per match?",
+        "golden_query": "SELECT AVG(total_runs) FROM (SELECT match_id, SUM(total_runs) AS total_runs FROM deliveries GROUP BY match_id);",
+        "order_sensitive": False
+    },
+    {
+        "id": 2,
+        "question": "List the top 5 bowlers with the most wickets in 2023.",
+        "golden_query": "SELECT bowler, COUNT(*) AS wickets FROM deliveries WHERE is_wicket = 1 AND season = 2023 GROUP BY bowler ORDER BY wickets DESC LIMIT 5;",
+        "order_sensitive": True  # ORDER BY matters here!
+    }
+]
+```
+
+### C. The Core Evaluator Logic (The "Secret Sauce")
+The biggest mistake is comparing SQL **strings** (e.g., `SELECT * FROM users` vs `SELECT users.* FROM users`). They are semantically identical but textually different.
+
+**The Solution**: Compare the **Result Sets** (tables/dataframes) generated by running the Golden SQL and the Generated SQL on the actual database.
+
+**Comparison Steps**:
+1.  **Execute Both Queries**: Run the Golden SQL and Generated SQL on the SQLite DB. Get two result tables (DataFrames).
+2.  **Check Row Count**: If the number of rows is different → **FAIL**.
+3.  **Normalize Values**: Convert `2.0` to `2`, handle `NULL` safely, strip whitespace.
+4.  **Sort (If Order Doesn't Matter)**: If the query doesn't have `ORDER BY`, sorting both tables alphabetically ensures we ignore row order variations.
+5.  **Compare Cell-by-Cell**: If all rows/columns match → **PASS**.
+
+### 💻 Code Example 4: Result-Set Comparison Logic (Simplified)
+
+```python
+import pandas as pd
+import sqlite3
+
+def compare_result_sets(golden_sql, generated_sql, db_conn, is_order_sensitive=False):
+    # 1. Execute both queries
+    df_golden = pd.read_sql_query(golden_sql, db_conn)
+    df_generated = pd.read_sql_query(generated_sql, db_conn)
+    
+    # 2. Check Row Count
+    if len(df_golden) != len(df_generated):
+        return False, f"Row count mismatch: {len(df_golden)} vs {len(df_generated)}"
+    
+    # 3. Normalize values (e.g., 2.0 -> 2, handle NULLs)
+    df_golden = df_golden.fillna(0).astype(str).applymap(lambda x: x.strip())
+    df_generated = df_generated.fillna(0).astype(str).applymap(lambda x: x.strip())
+    
+    # 4. Sorting (If order doesn't matter)
+    if not is_order_sensitive:
+        # Sort by all columns to ignore row order
+        df_golden = df_golden.sort_values(by=list(df_golden.columns)).reset_index(drop=True)
+        df_generated = df_generated.sort_values(by=list(df_generated.columns)).reset_index(drop=True)
+    
+    # 5. Compare DataFrames
+    if df_golden.equals(df_generated):
+        return True, "Match"
+    else:
+        return False, "Value mismatch"
+```
+
+---
+
+## 🚀 Part 3: The Live Execution & Final Results
+
+The instructor ran `main.py` which orchestrates: loading the 5 models via **OpenRouter** (unified API), looping through the 20 golden questions, generating SQL, executing it, and comparing results.
+
+### OpenRouter (Unified API Gateway)
+- **Problem**: GPT, Claude, Grok, and Chinese models have different API endpoints/syntaxes.
+- **Solution**: **OpenRouter** provides a single endpoint. You just change the `model` string (e.g., `"anthropic/claude-3.5-sonnet"` or `"x-ai/grok-2"`).
+
+### Live Performance Metrics (20 Hard Questions)
+
+| Model | Correct | Accuracy | Cost (₹ Lakhs/month) | Speed | Observation |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **GPT-5.6 Tera** | 16/20 | **80%** | ~5 Lakhs | Fast | Good but expensive. |
+| **Kimi K3** | ~11/20 | **55%** | ~2.5 Lakhs | Very Slow | **Leaderboard Hype fail**. Heavy reasoning model, slow, and terrible at SQL syntax (many errors). |
+| **Grok 4.5** | 18/20 | **90%** | ~2.5 Lakhs | Fast | **Unexpected Winner**. Extremely fast, cheap, and accurate. |
+| **Claude Sonnet 5** | 17/20 | **85%** | ~2.8 Lakhs | Very Fast | Highly reliable, stable API, close second. |
+| **Minimax M3** | ~13/20 | **65%** | ~1.2 Lakhs | Medium | Cheap, but Chinese models struggle with SQL syntax (generated invalid queries). |
+
+### The Final Decision
+- **The Winner (Accuracy)**: **Grok 4.5** (90%).
+- **The Winner (Stability)** : **Claude Sonnet 5** (85% but more reliable API).
+- **Decision**: The instructor leaned towards **Claude Sonnet 5** due to **Anthropic's enterprise-grade API reliability** (Elon Musk/Grok's API is considered slightly less enterprise-stable).
+
+---
+
+## 📝 Summary of Key Pointers
+
+1.  **Leaderboards are Filters, not Decisions**: They help go from 146 to 5 models. They cannot guarantee actual performance.
+2.  **Beware of Hype**: Kimi K3 was all over the news for being a "super model". On this specific Text-to-SQL task, it scored only 55% with high latency. **Always run custom evals.**
+3.  **Result-Set Comparison is Essential**: Never compare raw SQL strings. Always execute them and compare the returned tables/numbers.
+4.  **Normalize Before Comparing**: Handle `2.0` vs `2`, `NULL` vs `0`, and row orders (unless `ORDER BY` is required).
+5.  **OpenRouter is a Lifeline**: It allows testing multiple different models (OpenAI, Anthropic, Chinese models) using the exact same codebase.
+6.  **Cost vs Accuracy Trade-off**: Grok gave 90% accuracy at half the cost of GPT-5.6 Tera, making it the business choice, despite Sonnet being preferred for API stability.
+
+**Bottom Line**: The entire hands-on demo proved the golden rule of AI Engineering: **What works on a leaderboard doesn't always work on your specific data**. You must build the pipeline, run the evals, and let the numbers decide. 🚀
+
 - [Best AI for Coding](https://llm-stats.com/leaderboards/best-ai-for-coding)
 
+- [openrouter](https://openrouter.ai/)
+
+---
+
+## 012. How to Answer "How Do You Evaluate Your RAG App?" in GenAI Interviews (46:19)
 
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
