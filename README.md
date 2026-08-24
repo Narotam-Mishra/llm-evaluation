@@ -3530,6 +3530,260 @@ print(f"New offline dataset size: {len(offline_dataset)}")
 
 ## 013. How to Test RAG Retrievers(Hands-On) (01:47:01)
 
+This tutorial is the **hands-on implementation of Component-Level Evaluation** for a RAG system where we build a **Retriever** for the "CampusX Doubt Solver" (a RAG chatbot answering questions from lecture transcripts), learn the **correct way to evaluate it using LLM-as-a-Judge**, and then run multiple optimization experiments to improve its performance.
+
+---
+
+## 📁 Part 1: Project Setup & Building the Retriever
+
+**The Project**: "CampusX Doubt Solver" – a RAG app over the course's lecture transcripts (`.vtt` files).
+
+**Folder Structure**:
+- `data/` : Contains the raw lecture transcripts.
+- `src/` : Contains the application source code (`retriever.py`, `generator.py`, `reranker.py`).
+- `evals/` : Contains the evaluation scripts (`eval_retriever.py`).
+- `goldens/` : Contains the golden datasets (`retriever_goldens.json`).
+
+**Building the Retriever**:
+1.  **Load Data**: Read all `.vtt` transcript files.
+2.  **Preprocessing**: Remove timestamps (e.g., `0:00`) to keep only the semantic text. (Timestamps act as noise and break semantic meaning).
+3.  **Chunking**: Split text into overlapping chunks. **Initial Params**: `Chunk Size = 750`, `Overlap = 100`.
+4.  **Embedding**: Convert chunks to vectors using `OpenAI text-embedding-3-small`.
+5.  **Store**: Save vectors in a **ChromaDB** vector store.
+6.  **Retrieve**: Set `k = 5` (fetch top 5 most similar chunks).
+
+### 💻 Code Example 1: Building the Retriever (Conceptual)
+
+```python
+# src/retriever.py
+from langchain_community.document_loaders import TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from langchain_chroma import Chroma
+
+def load_transcripts(data_dir):
+    # Load all .vtt files, remove timestamps, extract text.
+    # Returns a list of LangChain Documents with metadata (session_id).
+    pass
+
+def build_retriever():
+    # 1. Load Data
+    documents = load_transcripts("data/")
+    
+    # 2. Chunking (Initial: 750 chars, overlap 100)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=750, 
+        chunk_overlap=100
+    )
+    chunks = splitter.split_documents(documents)
+    
+    # 3. Embedding & 4. Vector Store (Chroma)
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    vectorstore = Chroma.from_documents(
+        documents=chunks, 
+        embedding=embeddings,
+        persist_directory="./chroma_store"
+    )
+    
+    # 5. Retriever (k=5)
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    return retriever
+```
+
+---
+
+## 🧩 Part 2: Retriever Failure Modes & Metrics
+
+### The Two Failure Modes of a Retriever
+
+| Failure Mode | Description | Example (Golden = Docs 1,5,9) |
+| :--- | :--- | :--- |
+| **Miss** | The retriever fails to fetch the correct documents. | Fetches Docs 10, 11, 12. (0 relevant). |
+| **Noise** | The retriever fetches correct documents BUT also brings irrelevant ones. | Fetches Docs 1, 5, 10, 11, 12. (Only 2 relevant). |
+
+### The Metrics (Traditional Definition)
+- **Recall**: Out of *all* correct documents (e.g., 3), how many did we fetch? (Max score = 1.0).
+- **Precision**: Out of *all* documents we fetched (e.g., 5), how many are relevant? (Max score = 1.0).
+- **Trade-off**: Increasing `k` usually increases Recall but hurts Precision (more noise).
+
+---
+
+## ❌ Part 3: The "Flawed" Golden Dataset Approach (Document IDs)
+
+**The Flawed Idea**: Create a Golden Dataset with `(Question, Chunk_IDs)` pairs. 
+- Example: Q1 → Docs 72, 89, 100.
+- Then, compare the Retriever's output IDs to this list to calculate Recall/Precision.
+
+**Why this FAILS in real projects**:
+Imagine you change your **Chunking Parameters** (e.g., from 750 to 1000). The IDs of the chunks change completely! 
+Your Golden Dataset (which stored IDs `72, 89, 100`) is now **VOID**. You have to manually re-label the entire dataset every time you tweak chunking. This is unscalable.
+
+---
+
+## ✅ Part 4: The Correct Method (LLM-as-a-Judge & Claims)
+
+**The Robust Idea**: Create a Golden Dataset with `(Question, Ideal_Answer)`.
+- The *Ideal Answer* is the perfect answer crafted by a human expert *based solely on the lecture transcripts*.
+- You DO NOT store chunk IDs.
+
+**How it works (Contextual Recall)**:
+1.  Run the Query through the Retriever → get 5 chunks.
+2.  Give the `Ideal Answer` to an **LLM-as-a-Judge**.
+3.  Ask the Judge: *"Break this Ideal Answer into atomic claims (factual statements)."*
+4.  Then ask: *"For each claim, check if it is supported by the 5 retrieved chunks."*
+5.  **Contextual Recall** = (Number of claims found) / (Total claims in Ideal Answer).
+
+**How it works (Contextual Precision - Rank Aware)**:
+Traditional Precision treats all chunks equally, ignoring rank. If correct chunks are at positions 1 & 2, it's better than if they are at positions 4 & 5.
+- **Rank-Aware Scoring**: Iterate through the retrieved chunks in order.
+- For chunk 1: Calculate precision so far.
+- For chunk 2: Calculate precision so far...
+- **Final Score = Average of these cumulative precision scores**.
+- *Result*: Correct chunks appearing at the top yield a MUCH higher score.
+
+### 💻 Code Example 2: Simulating the "Claims" Approach (Conceptual)
+
+```python
+# Conceptual representation of the LLM-as-a-Judge process
+ideal_answer = "RAG evaluates Contextual Relevancy, Faithfulness, and Answer Relevancy."
+claims = ["RAG evaluates Contextual Relevancy.", 
+          "RAG evaluates Faithfulness.", 
+          "RAG evaluates Answer Relevancy."]
+
+retrieved_chunks = [
+    "Contextual Relevancy checks if the retrieved context matches the query.",
+    "Faithfulness checks if the answer is grounded in the context.",
+    "Answer Relevancy is not mentioned here.",
+    "Random text.",
+    "Some other text."
+]
+
+# LLM-as-a-Judge checks each claim against all chunks:
+claim_1_found = True  # Found in chunk 1
+claim_2_found = True  # Found in chunk 2
+claim_3_found = False # Not found in any chunk
+
+contextual_recall = sum([claim_1_found, claim_2_found, claim_3_found]) / 3
+print(f"Contextual Recall: {contextual_recall:.0%}") # Output: 66%
+
+# Contextual Precision (Rank-aware):
+# Chunk 1: Correct (1/1 = 1.0)
+# Chunk 2: Correct (2/2 = 1.0)
+# Chunk 3: Incorrect (2/3 = 0.66)
+# Chunk 4: Incorrect (2/4 = 0.5)
+# Chunk 5: Incorrect (2/5 = 0.4)
+# Avg = (1.0 + 1.0 + 0.66 + 0.5 + 0.4) / 5 = 0.71
+```
+
+---
+
+## 👨‍💻 Part 5: Sourcing the Golden Dataset
+
+**Options to build `(Question, Ideal_Answer)` pairs**:
+1.  **Hand-Authored**: Human expert reads transcripts and writes Q&A. *Best quality, but very expensive*.
+2.  **LLM-Assisted Drafting**: (Used by the instructor). Upload transcripts to Claude, instruct it to generate Q&A pairs *from the transcripts*, then manually review/edit them. *Good balance of cost/quality*.
+3.  **DeepEval Synthesizer**: DeepEval has a built-in module to auto-generate test cases from documents. (Tested, but the instructor found the output questions too academic/irrelevant for his specific use case).
+4.  **Production Logs**: After deployment, take successful user conversations (where they gave thumbs up) and turn them into Q&A pairs.
+
+---
+
+## 🛠️ Part 6: Implementing the Eval Script with DeepEval
+
+**DeepEval Structure**:
+1.  **`LLMTestCase`**: Represents one row of your Golden Dataset. Contains `input` (question), `actual_output` (placeholder), `expected_output` (Ideal Answer), and `retrieval_context` (the chunks fetched by the retriever).
+2.  **Metric**: Instantiate the metrics (e.g., `ContextualRecallMetric`, `ContextualPrecisionMetric`). Set a `threshold` and define which `model` to use as the judge.
+3.  **`evaluate()`**: The function that runs all test cases through all metrics and returns scores.
+
+### 💻 Code Example 3: DeepEval Retriever Evaluation Script
+
+```python
+# evals/eval_retriever.py
+import json
+from deepeval import evaluate
+from deepeval.metrics import ContextualRecallMetric, ContextualPrecisionMetric
+from deepeval.test_case import LLMTestCase
+from src.retriever import build_retriever
+
+# 1. Load Golden Dataset
+with open("goldens/retriever_goldens.json", "r") as f:
+    golden_data = json.load(f)
+
+# 2. Setup Judge Model & Metrics
+judge_model = "gpt-4o-mini"  # LLM-as-a-Judge
+metrics = [
+    ContextualRecallMetric(threshold=0.7, model=judge_model),
+    ContextualPrecisionMetric(threshold=0.7, model=judge_model)
+]
+
+# 3. Build Retriever & Generate Test Cases
+retriever = build_retriever()
+test_cases = []
+
+for item in golden_data:
+    query = item["question"]
+    ideal_answer = item["ideal_answer"]
+    
+    # Get retrieved context from our retriever
+    retrieved_docs = retriever.invoke(query)
+    retrieved_context = [doc.page_content for doc in retrieved_docs]
+    
+    test_case = LLMTestCase(
+        input=query,
+        actual_output="Placeholder (Generator not evaluated here)", 
+        expected_output=ideal_answer,
+        retrieval_context=retrieved_context
+    )
+    test_cases.append(test_case)
+
+# 4. Run Evaluation
+results = evaluate(test_cases, metrics)
+print(f"Contextual Recall: {results[0].score}")
+print(f"Contextual Precision: {results[1].score}")
+```
+
+---
+
+## 📊 Part 7: Optimization Journey (The Iterative Process)
+
+The instructor runs several experiments to improve the Retriever's performance on 15 hard questions.
+
+| Trial | Configuration | Recall | Precision | Failures |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. Baseline** | Chunk 750/100, `k=5`, Embedding=small | **80%** | **80%** | 5/15 |
+| **2. Change Chunking** | Chunk 1000/150, `k=5` | **97%** | **83%** | 3/15 |
+| **3. Add Re-Ranker** | Chunk 1000/150, `k=5`, + Cross-Encoder Reranker | ~92% | **85%** | 2/15 |
+| **4. Upgrade Embeddings**| Chunk 1000/150, Reranker, Embedding=**Large** | **99%** | ~85% | 3/15 |
+
+**Key Observations**:
+- **Increasing Chunk Size** significantly improved Recall (80→97%) because the retriever captured more complete context.
+- **Adding a Re-ranker** slightly boosted Precision (83→85%) by moving relevant chunks to the top (rank-awareness).
+- **Using a better Embedding Model** gave near-perfect Recall (99%) but didn't improve Precision much.
+- **Changing `k` to 3** reduced the number of chunks, which *lowered* Precision slightly due to random variance (small dataset).
+
+**Conclusion**: The retriever achieved **~99% Recall** and **~85% Precision**, which is considered "actually good" for production. The optimization loop proved that testing parameters (chunk size, rerankers, models) is essential.
+
+---
+
+## 📝 Final Summary
+
+| Concept | Key Pointer |
+| :--- | :--- |
+| **Test-as-you-build** | Build the Retriever first, then evaluate it *before* building the Generator. |
+| **Failure Modes** | Retriever can suffer from **Misses** (no correct docs) or **Noise** (too much trash). |
+| **Flawed Eval** | Comparing **Chunk IDs** is brittle. Changing chunk size breaks the dataset. |
+| **Correct Eval** | Compare **Claims** from the `Ideal Answer` against the retrieved context using an **LLM-as-a-Judge**. |
+| **Contextual Recall** | How many claims from the ideal answer are found in the retrieved chunks? |
+| **Contextual Precision** | How many retrieved chunks are relevant, and are the relevant ones ranked **at the top**? |
+| **Golden Dataset** | Source via **LLM-assisted drafting** + human review. Do NOT use hardcoded document IDs. |
+| **DeepEval** | Structure: `LLMTestCase` → `Metric` → `evaluate()`. |
+| **Optimization** | Chunk size, embedding models, and re-rankers have a significant impact. Always iterate and measure! |
+
+**Bottom Line**: Evaluating a Retriever by comparing chunks IDs is a rookie mistake. The professional way is to use an **LLM-as-a-Judge to compare the semantic claims** between the ideal answer and the retrieved context. This approach is robust to changes in chunking parameters and gives a true measure of information coverage and ranking quality. 🚀
+
+---
+
+## 014. Evaluating RAG: Testing the Generator & Full Pipeline with the RAG Triad (01:21:28)
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 ---

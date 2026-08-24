@@ -59,8 +59,8 @@ def load_store():
     docs = load_transcripts()
 
     chunks = RecursiveCharacterTextSplitter(
-        chunk_size=750,
-        chunk_overlap=100,
+        chunk_size=1000,
+        chunk_overlap=150,
     ).split_documents(docs)
 
     if not chunks:

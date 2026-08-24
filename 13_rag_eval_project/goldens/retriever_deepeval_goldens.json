@@ -1,0 +1,92 @@
+[
+  {
+    "id": "g001",
+    "query": "If you missed prior lectures, how might attending today’s independent class affect your learning pace?",
+    "ideal_answer": "Attending today’s independent class allows you to keep up with the schedule without waiting to complete back notes, so your learning pace can continue smoothly. Meanwhile, you can cover missed lectures at your own pace without affecting your progress in current sessions.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g002",
+    "query": "If a new LLM claimed unmatched skills, which benchmarks like IF eval or MMMU would verify it?",
+    "ideal_answer": "To verify unmatched skills claimed by a new LLM, benchmarks like IF eval would assess its instruction-following ability, while MMMU would test its multi-modal capabilities. These benchmarks are part of model evaluation to measure specific LLM capabilities.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g003",
+    "query": "Examine methodologies ensuring LLM outputs adhere strictly to ethical and factual human-centric standards.",
+    "ideal_answer": "Methodologies ensuring LLM outputs adhere to ethical and factual human-centric standards focus on alignment, which means aligning models with human values to prevent hallucination, lying, cheating, or inappropriate tone. This includes ensuring answers are reliable, truthful, and free from propagated misconceptions seen in training data, thereby maintaining confidence and correctness in responses.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g004",
+    "query": "How should PII be masked and stored securely during chatbot conversations to ensure privacy?",
+    "ideal_answer": "PII should be masked by obscuring or blurring sensitive textual information such as phone numbers, card numbers, and other personal details before storing it in Langsmith. This ensures that no personal data can be extracted later, maintaining user privacy and data security.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g005",
+    "query": "Compare the cost and performance differences between the large top-tier LLM and the smaller mid-tier model.",
+    "ideal_answer": "The large top-tier LLM (Model A) offers the best performance, ranking at the top of public benchmarks, but costs about $15 per 1 million tokens. The smaller mid-tier model is significantly cheaper at $0.50 per 1 million tokens but delivers mid-level performance, ranking in the middle of the benchmarks.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g006",
+    "query": "How do standard evaluation metrics for RAD, agents, and multi-turn conversations differ or align?",
+    "ideal_answer": "Standard evaluation metrics for RAD, agents, and multi-turn conversations each address specific aspects of their respective applications but share the goal of measuring performance effectively. While RAD metrics focus on accuracy and relevance in retrieval tasks, agent metrics evaluate interaction quality and task completion, and multi-turn conversation metrics assess coherence and context retention across exchanges. These metrics align in providing standardized ways to evaluate system effectiveness but differ based on the unique requirements of each use case. Detailed discussion on these will be covered in the next class.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g007",
+    "query": "What are the main characteristics of LLM evals, including their systematic, repeatable nature and clear criteria?",
+    "ideal_answer": "The main characteristics of LLM evals are that they are systematic, repeatable, and based on clear criteria. Systematic means using proper datasets to cover all cases rather than informal testing. Repeatable ensures the tests can be consistently applied multiple times. Clear criteria provide a defined standard to judge the LLM or LLM-powered system.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g008",
+    "query": "Analyze cost-efficiency and scalability constraints in curating extensive human-annotated golden datasets.",
+    "ideal_answer": "Curating extensive human-annotated golden datasets is costly and time-consuming due to the manual effort required. Additionally, as dataset size grows, the number of LLM calls—and thus expenses—increases significantly (e.g., 2500 calls for 500 questions across 5 models), impacting budget and scalability. A practical approach is to limit dataset size (50 to 500 questions) and incrementally add challenging new questions based on model failures to balance cost and effectiveness.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g009",
+    "query": "Which specific drift types—data, model, concept, or user expectation—impact AI system performance?",
+    "ideal_answer": "All these drift types—data drift, model drift, concept drift, and user expectation drift—can impact AI system performance. Data drift changes input data distribution, model drift affects model behavior over time, concept drift alters the underlying relationship the model learns, and user expectation drift occurs when users' needs or contexts change, leading to dissatisfaction despite stable offline evaluations.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g010",
+    "query": "How does custom eval on our data reveal model B’s value over benchmark-superior model A?",
+    "ideal_answer": "Custom eval on our data reveals model B’s value because it assesses the model’s performance in our specific application context, showing that model B saves money and reduces latency with acceptable accuracy. Benchmarks favor model A generally, but they don’t reflect our unique needs, so relying solely on them would not have identified model B as the better choice.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g011",
+    "query": "How does GROK's speed and accuracy on golden dataset Q2 and brutal Q9 outperform K3, GPT, and Chemiketri?",
+    "ideal_answer": "GROK outperforms K3, GPT, and Chemiketri by being clearly faster and error-free so far. On the golden dataset question 2, where both GPT and Chemiketri failed, GROK successfully cracked it without errors. Although question 9 (the brutal question) also posed challenges, GROK still showed better performance, highlighting its superior speed and accuracy compared to the others.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g012",
+    "query": "Compare GROK vs Sonnet top scores and consistency over 5 runs on the small dataset, noting error rates.",
+    "ideal_answer": "GROK consistently outperforms Sonnet over 5 runs on the small dataset, achieving the top scores each time. Despite some errors in 5-6 questions, GROK maintains about 65% accuracy, while Sonnet scores lower (around 85-90). Overall, GROK shows better consistency and higher performance than Sonnet in this evaluation.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g013",
+    "query": "Explain the benchmark’s core aim to assess model’s truth recognition and unknown-answer detection only.",
+    "ideal_answer": "The benchmark’s core aim is to evaluate whether a model can recognize the truthfulness of information and identify when it does not know the answer, rather than simply testing its factual knowledge.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g014",
+    "query": "What targeted system improvements follow 80% accuracy evaluation before re-triggering performance assessment?",
+    "ideal_answer": "After achieving 80% accuracy, targeted system improvements include tweaking the prompt and/or changing the model to enhance performance. Once these improvements are made, you re-trigger the evaluation to assess the updated system.",
+    "source": "TODO-verify"
+  },
+  {
+    "id": "g015",
+    "query": "Outline the transition strategy from theoretical leaderboard benchmarks to hands-on GPQA practicals.",
+    "ideal_answer": "The transition strategy involves concluding the theoretical classes on leaderboard benchmarks today, allowing students to focus solely on theory and prepare for practical sessions. From the next class onward, the course shifts to hands-on activities, starting with the GPQA benchmark, which emphasizes practical application by exploring Google Proof Question and Answers, moving beyond the mostly easy questions of previous benchmarks like MMLU.",
+    "source": "TODO-verify"
+  }
+]
