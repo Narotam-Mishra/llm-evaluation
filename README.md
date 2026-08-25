@@ -3784,8 +3784,267 @@ The instructor runs several experiments to improve the Retriever's performance o
 
 ## 014. Evaluating RAG: Testing the Generator & Full Pipeline with the RAG Triad (01:21:28)
 
+This transcript is the **hands-on implementation of Component-Level Evaluation for the Generator** in a RAG system where we build the Generator (an LLM with a system prompt), learn its **two core failure modes** (Unfaithfulness/Hallucination and Answer Irrelevance), and implement **Faithfulness** and **Answer Relevancy** metrics using **DeepEval** and an **LLM-as-a-Judge**. The instructor then runs multiple experiments to optimize the **system prompt**, successfully boosting Answer Relevancy from 73% to 92%.
+
+---
+
+## 📁 Part 1: Building the Generator (Component 2)
+
+**File**: `src/generator.py`
+
+**What it does**: 
+- Takes a `question` and `context` as input.
+- Uses an LLM (GPT-4o-mini with `temperature=0`) to generate an answer *strictly* from the provided context.
+- Key System Prompt rules:
+  - *"Answer only from the context provided."*
+  - *"Do NOT add outside knowledge."*
+  - *"If the context doesn't contain enough info, say 'I don't have enough information' (do NOT hallucinate)."*
+
+### 💻 Code Example 1: Generator System Prompt
+
+```python
+# src/generator.py
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+system_prompt = """
+You are a helpful teaching assistant for a course on LLM Evaluations.
+Answer the student's question ONLY from the context provided below.
+Do NOT add outside knowledge.
+If the context does not contain enough information, say "I don't have enough information in the course material to answer that."
+Keep the answer clear and concise.
+Context: {context}
+Question: {question}
+"""
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+prompt = ChatPromptTemplate.from_template(system_prompt)
+chain = prompt | llm | StrOutputParser()
+
+def generate(question, context):
+    return chain.invoke({"question": question, "context": context})
+```
+
+---
+
+## 🧩 Part 2: The 2 Generator Failure Modes
+
+Before evaluating, we identify *how* the Generator can fail.
+
+| Failure Mode | Description | Metric |
+| :--- | :--- | :--- |
+| **1. Unfaithfulness** | The model generates information **NOT present** in the provided context (hallucination). | **Faithfulness** (Lower = more hallucination). |
+| **2. Answer Irrelevance** | The model is faithful to the context (doesn't hallucinate), but the answer **does NOT actually answer the user's question**. | **Answer Relevancy** (Lower = off-topic). |
+
+**Key Insight**: A model can be 100% Faithful (only using context) but still give an irrelevant answer.
+
+---
+
+## 🧠 Part 3: How Faithfulness is Calculated
+
+**Requires a "Golden Dataset"** with two columns:
+1. `Question` (e.g., "What is a RAG Triad?")
+2. `Golden_Context` (The exact chunks from the vector DB that contain the *correct* answer).
+
+**Step-by-step Process**:
+1.  Give `Question` + `Golden_Context` to the Generator → get `Generated_Answer`.
+2.  Pass `Generated_Answer` to an **LLM-as-a-Judge**.
+3.  Ask the Judge: *"Break this answer into atomic claims (small factual statements)."* (e.g., Claim 1, Claim 2, Claim 3).
+4.  Ask the Judge: *"For each claim, check if it exists in the Golden_Context."*
+5.  **Faithfulness Score** = (Number of claims found in Golden_Context) / (Total number of claims in the Generated_Answer).
+
+> **Note**: Faithfulness does NOT measure correctness. If the Golden_Context itself is wrong, a faithful answer will also be wrong. Faithfulness only measures adherence to the provided context.
+
+### 💻 Code Example 2: Simulating Faithfulness Logic
+
+```python
+# Conceptual simulation
+question = "What is a RAG Triad?"
+golden_context = "The RAG Triad consists of Contextual Relevancy, Faithfulness, and Answer Relevancy."
+
+generated_answer = "A RAG Triad has Contextual Relevancy, Faithfulness, and Answer Relevancy. It also has a fourth metric called Latency."  # Hallucinated "Latency"
+
+# LLM-as-a-Judge breaks answer into claims
+claims = [
+    "RAG Triad has Contextual Relevancy.",
+    "RAG Triad has Faithfulness.",
+    "RAG Triad has Answer Relevancy.",
+    "RAG Triad has a fourth metric called Latency."  # This is not in the context.
+]
+
+# Check each claim against the golden_context
+found_claims = 0
+for claim in claims:
+    # In reality, an LLM does semantic comparison.
+    if "Latency" not in claim: # Simulating the check
+        found_claims += 1
+
+faithfulness_score = found_claims / len(claims)
+print(f"Faithfulness Score: {faithfulness_score:.0%}") # Output: 75% (3/4)
+```
+
+---
+
+## 🧠 Part 4: How Answer Relevancy is Calculated
+
+**This is a Reference-Free Eval** (No Golden Context required). You only need the `Question` and the `Generated_Answer`.
+
+**Step-by-step Process**:
+1.  Give `Question` + (any) `Context` to the Generator → get `Generated_Answer`.
+2.  Pass `Generated_Answer` to an **LLM-as-a-Judge**.
+3.  Ask the Judge: *"Break this answer into atomic claims."*
+4.  Ask the Judge: *"For each claim, does it help answer the original Question? Or is it off-topic?"*
+5.  **Answer Relevancy Score** = (Number of claims relevant to the question) / (Total number of claims in the answer).
+
+### 💻 Code Example 3: Simulating Answer Relevancy Logic
+
+```python
+# Conceptual simulation
+question = "Does the CampusX AI program include live classes?"
+generated_answer = "The program includes recorded lessons, coding assignments, projects, and weekly doubt-solving sessions." # Faithful but does NOT answer "live classes".
+
+# LLM-as-a-Judge breaks answer into claims
+claims = [
+    "Program includes recorded lessons.",
+    "Program includes coding assignments.",
+    "Program includes projects.",
+    "Program includes weekly doubt-solving sessions."
+]
+
+# Check each claim against the QUESTION (Are they relevant to "live classes"?)
+# None of them mention "live classes". All are irrelevant to answering the specific question.
+relevant_claims = 0  # 0 out of 4 are relevant.
+
+answer_relevancy = relevant_claims / len(claims)
+print(f"Answer Relevancy: {answer_relevancy:.0%}") # Output: 0%
+```
+
+---
+
+## 📂 Part 5: Sourcing the Golden Dataset (for Faithfulness)
+
+**Why Chunk IDs are a bad idea**: If you change chunking parameters, the IDs change, breaking the dataset.
+
+**Instructor's Approach**:
+1.  Export **all chunks** from the ChromaDB (`export_chroma_chunks.py`) into a JSON file.
+2.  Upload the JSON to **Claude**.
+3.  Ask Claude to generate `(Question, Golden_Context)` pairs *step-by-step* (one at a time).
+4.  **Manually review** each generated pair to ensure quality and relevance to the course. (He created 15 questions).
+
+**Other Methods**:
+- **Human-authored** (best quality, low scalability).
+- **DeepEval Synthesizer** (automated, but he found the output too irrelevant/academic for his specific case).
+
+---
+
+## ⚙️ Part 6: DeepEval Implementation (eval_generator.py)
+
+**DeepEval Structure**:
+1.  **`LLMTestCase`**: Represents one test row. Contains `input` (question), `actual_output` (generated answer), `retrieval_context` (Golden Context).
+2.  **Metrics**: `FaithfulnessMetric` (threshold=0.7) and `AnswerRelevancyMetric` (threshold=0.7), using `gpt-4o-mini` as the judge.
+3.  **`evaluate()`**: Runs all test cases through all metrics.
+
+### 💻 Code Example 4: DeepEval Generator Evaluation Script
+
+```python
+# evals/eval_generator.py
+import json
+from deepeval import evaluate
+from deepeval.metrics import FaithfulnessMetric, AnswerRelevancyMetric
+from deepeval.test_case import LLMTestCase
+from src.generator import generate
+
+# 1. Load Golden Dataset (Question + Golden Context)
+with open("goldens/faithfulness_dataset.json", "r") as f:
+    golden_data = json.load(f)
+
+# 2. Setup Judge & Metrics
+judge_model = "gpt-4o-mini"
+metrics = [
+    FaithfulnessMetric(threshold=0.7, model=judge_model, include_reason=True),
+    AnswerRelevancyMetric(threshold=0.7, model=judge_model, include_reason=True)
+]
+
+# 3. Generate Test Cases
+test_cases = []
+for item in golden_data:
+    question = item["question"]
+    golden_context = item["golden_context"]
+    
+    # Generate answer using the Generator (ISOLATION)
+    generated_answer = generate(question, golden_context)
+    
+    test_case = LLMTestCase(
+        input=question,
+        actual_output=generated_answer,
+        retrieval_context=[golden_context]  # Faithfulness checks this against the answer
+        # Note: For Answer Relevancy, DeepEval ignores retrieval_context and only checks input vs actual_output.
+    )
+    test_cases.append(test_case)
+
+# 4. Run Evaluation
+results = evaluate(test_cases, metrics)
+for result in results:
+    print(f"{result.metric_name}: {result.score}")
+```
+
+---
+
+## 🚀 Part 7: Optimization – System Prompt Engineering
+
+**Baseline Scores**:
+- Faithfulness: **91%** (Good out of the box because modern LLMs follow instructions well).
+- Answer Relevancy: **73%** (Needed improvement).
+
+**Why Faithfulness is easier**: The model is explicitly told to use the context. The "instruct" nature of LLMs naturally leads to high faithfulness.
+
+**How to improve Relevancy**:
+1.  **Analyze Failures**: Run the eval, look at the `reason` provided for each failed test case.
+2.  **Refine System Prompt**: Explicitly add rules to the prompt based on the failures.
+   - *Example added rule*: *"Do not overstate claims. If the context says 'may cause', don't say 'causes'."*
+   - *Example added rule*: *"If the context doesn't answer the specific part of the question, acknowledge it."*
+3.  **Iterate**: Repeat the process 3-4 times.
+
+**Optimized Scores** (After 3-4 iterations):
+- Faithfulness: **96%** (↑ 5%)
+- Answer Relevancy: **92%** (↑ 19%)
+
+**Warning**: Be careful not to **overfit** to the test dataset. The prompt should be general, not crafted to pass just these 15 specific questions.
+
+---
+
+## 📊 Part 8: Summary of Achievements (Component-Level Completed)
+
+The instructor marks the **Component Level** as **COMPLETE**.
+
+| Component | Metrics Learned | How to Optimize |
+| :--- | :--- | :--- |
+| **Retriever** | Contextual Recall, Contextual Precision | Change chunk size, overlap, embedding model, add reranker. |
+| **Generator** | Faithfulness, Answer Relevancy | Improve system prompt, upgrade to a better base LLM. |
+
+**Next Step**: **Pipeline-Level Evaluation** (connecting the Retriever and Generator and testing the full RAG flow using the **RAG Triad** – Contextual Relevancy, Faithfulness, Answer Relevancy).
+
+---
+
+## 📝 Final Important Pointers
+
+1.  **Generator = LLM + Prompt**: The "brains" are the model, but the "training" happens via the system prompt. Prompt tuning is your primary lever.
+2.  **Faithfulness ≠ Correctness**: Faithfulness only checks if the answer *came from* the context. If the context is wrong, the answer is faithfully wrong.
+3.  **Reference-Free is Cheaper**: Answer Relevancy doesn't need a golden context, making it cheaper to implement for ongoing tests.
+4.  **DeepEval Parallelism**: The `evaluate()` function runs test cases in parallel, speeding up the process.
+5.  **Overfitting Risk**: Don't over-optimize your system prompt to pass your specific golden dataset. Ensure the prompt is general enough for real-world queries.
+
+**Bottom Line**: The Generator is evaluated by checking if it **hallucinates** (Faithfulness) and if it **answers the actual question** (Answer Relevancy). Both are measured using an **LLM-as-a-Judge** that breaks down the answer into atomic claims. The best way to improve these scores is to iteratively refine the system prompt based on the reasoning given in failed test cases. 🚀
+
+---
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 ---
 
 - [Notes](https://onedrive.live.com/personal/85452F67DAA1111C/_layouts/15/Doc.aspx?sourcedoc={90714588-0955-47bc-bf9e-176879959e0d}&action=view&redeem=aHR0cHM6Ly8xZHJ2Lm1zL28vYy84NTQ1MkY2N0RBQTExMTFDL0lnQ0lSWEdRVlFtOFI3LWVGMmg1bFo0TkFheWVYXzlSM1Y0WEhERG1zWFlNbnJr&wd=target%281.%20Introduction%20to%20LLM%20Evals.one%7Ca35dbc27-08ab-4743-b3b0-6b36c29acfd5%2FCourse%20Outline%7C165aacba-2851-e54b-bf9f-885a1a42b9ee%2F%29&wdorigin=NavigationUrl)
+
+
+
+
