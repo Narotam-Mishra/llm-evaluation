@@ -4039,6 +4039,225 @@ The instructor marks the **Component Level** as **COMPLETE**.
 
 ---
 
+This tutorail marks the **completion of the Pipeline-Level Evaluation** for the RAG system. After building the full RAG pipeline (Retriever + Generator), the instructor introduces the **RAG Triad** (3 metrics), implements the evaluation script using DeepEval, and discovers a **"Curious Case"**: high Recall/Precision but low Contextual Relevancy. The deep-dive explanation reveals the difference between **chunk-level usefulness** and **sentence-level noise**.
+
+---
+
+## 🔌 Part 1: Assembling the Full RAG Pipeline (`rag_pipeline.py`)
+
+**Goal**: Connect the `Retriever` and `Generator` into a single end-to-end pipeline.
+
+**File**: `src/rag_pipeline.py`
+
+**Logic**:
+1.  Take a user `question`.
+2.  Send it to the `Retriever` → get 5 relevant context chunks.
+3.  Combine `question` + `context` → send to the `Generator` (LLM).
+4.  Return the final `answer`.
+
+### 💻 Code Example 1: Assembling the Pipeline
+
+```python
+# src/rag_pipeline.py
+from src.retriever import build_reranking_retriever
+from src.generator import generate
+
+class RAGPipeline:
+    def __init__(self):
+        self.retriever = build_reranking_retriever()  # Uses the final optimized retriever
+        self.generator = generate  # Function from generator.py
+    
+    def query(self, question):
+        # Step 1: Retrieve context
+        retrieved_docs = self.retriever.invoke(question)
+        context = "\n".join([doc.page_content for doc in retrieved_docs])
+        
+        # Step 2: Generate answer
+        answer = self.generator(question, context)
+        
+        return answer, retrieved_docs
+
+# Test run (live demo)
+pipeline = RAGPipeline()
+ans, docs = pipeline.query("What is drift and why does it matter after deployment?")
+print(ans)  # Outputs a coherent answer based on retrieved transcripts.
+```
+
+---
+
+## 🧩 Part 2: Pipeline-Level Evaluation – The RAG Triad
+
+At the Pipeline level, we test how well the **Retriever** and **Generator** work *together*. We use the **RAG Triad** – three metrics that measure the relationship between the three core elements: **Question (Q)**, **Retrieved Context (C)**, and **Generated Answer (A)**.
+
+| Pair | Metric | Question it Answers |
+| :--- | :--- | :--- |
+| **Q ↔ C** | **Contextual Relevancy** | Is the *retrieved context* actually relevant to answering the *question*? |
+| **C ↔ A** | **Faithfulness** | Is the *answer* grounded in the *retrieved context*? (No hallucination). |
+| **Q ↔ A** | **Answer Relevancy** | Does the *answer* directly address the *question*? |
+
+> **Crucial Difference from Component-Level Eval**: 
+> - In **Component-Level** (evaluating the Generator in isolation), the `Context` was the **Golden Context** (handpicked from the dataset).
+> - In **Pipeline-Level**, the `Context` is the **Retriever's output** (real, imperfect retrieval). This is why the scores can change dramatically.
+
+---
+
+## ⚙️ Part 3: DeepEval Implementation (`eval_rag_pipeline.py`)
+
+The code structure is identical to the previous eval scripts, but this time we use **three metrics** and feed the `retrieval_context` from the *actual pipeline* (not the golden dataset).
+
+### 💻 Code Example 2: RAG Triad Evaluation Script
+
+```python
+# evals/eval_rag_pipeline.py
+import json
+from deepeval import evaluate
+from deepeval.metrics import (
+    FaithfulnessMetric, 
+    AnswerRelevancyMetric, 
+    ContextualRelevancyMetric
+)
+from deepeval.test_case import LLMTestCase
+from src.rag_pipeline import RAGPipeline
+
+# 1. Load Golden Dataset (Contains Question + Golden Context, but we only use the Question here)
+with open("goldens/faithfulness_dataset.json", "r") as f:
+    golden_data = json.load(f)
+
+# 2. Setup Judge & Metrics
+judge_model = "gpt-4o-mini"
+metrics = [
+    FaithfulnessMetric(threshold=0.7, model=judge_model),
+    AnswerRelevancyMetric(threshold=0.7, model=judge_model),
+    ContextualRelevancyMetric(threshold=0.7, model=judge_model)
+]
+
+# 3. Instantiate the actual RAG Pipeline
+pipeline = RAGPipeline()
+
+# 4. Generate Test Cases (using REAL pipeline outputs)
+test_cases = []
+for item in golden_data:
+    question = item["question"]
+    
+    # Run the FULL pipeline (Retriever + Generator)
+    answer, retrieved_docs = pipeline.query(question)
+    retrieved_context = [doc.page_content for doc in retrieved_docs]
+    
+    test_case = LLMTestCase(
+        input=question,
+        actual_output=answer,
+        retrieval_context=retrieved_context  # This comes from the Retriever now!
+    )
+    test_cases.append(test_case)
+
+# 5. Run Evaluation
+results = evaluate(test_cases, metrics)
+for result in results:
+    print(f"{result.metric_name}: {result.score}")
+```
+
+---
+
+## 📊 Part 4: The Results – A "Curious Case"
+
+**Scores from the run**:
+
+| Metric | Score |
+| :--- | :--- |
+| **Faithfulness** | ~93% (Good) |
+| **Answer Relevancy** | ~86% (Good) |
+| **Contextual Relevancy** | **~42% (Poor!)** |
+
+**The Confusion**: 
+- The **Retriever's standalone metrics** (Recall = 99%, Precision = 89%) were excellent.
+- Yet, the **Contextual Relevancy** (part of the RAG Triad) is only 42%.
+
+### The "Duality of the Retriever" Explained
+
+This happens because **Precision/Recall** and **Contextual Relevancy** measure **different things**:
+
+- **Precision** (Retriever standalone): *"Out of all the chunks I fetched, how many are broadly useful for this query?"* (Chunk-level check). 
+  - *Example*: You fetch 5 chunks. 4 of them contain the *topic*. Precision = 80%. High.
+
+- **Contextual Relevancy** (Pipeline level): *"Out of all the sentences (claims) inside the fetched chunks, how many are *directly* relevant to the query?"* (Sentence-level check).
+  - *Example*: Each chunk is long (e.g., 1000 characters). Inside those chunks, only 2 out of 5 sentences are actually about the specific question. The rest is filler, context, or slightly off-topic.
+
+**Key Insight**: Your retriever is good at fetching the **right documents**, but those documents (chunks) are **too large** and contain **too much noise**. The core answer is buried under lots of irrelevant sentences. Contextual Relevancy penalizes this noise.
+
+### 💻 Code Example 3: Simulating the "Noise" Problem
+
+```python
+# Simulating the disconnect between Chunk-level and Sentence-level relevance
+
+# Imagine a single retrieved chunk (Context)
+retrieved_chunk = """
+Drift is a gradual change in system performance. 
+This happens over time. 
+The evaluation suite becomes obsolete. 
+Drift can cause incorrect outputs. 
+Today's lecture covers LLM Evaluations extensively.
+"""
+
+# Query: "What is drift and why does it matter?"
+# 1. PRECISION (Chunk-level): This chunk is relevant to "drift" -> Pass!
+# 2. CONTEXTUAL RELEVANCY (Sentence/Claim-level):
+#    - "Drift is a gradual change..." -> Relevant
+#    - "This happens over time." -> Relevant
+#    - "The evaluation suite becomes obsolete." -> Relevant
+#    - "Drift can cause incorrect outputs." -> Relevant
+#    - "Today's lecture covers LLM Evaluations extensively." -> IRRELEVANT (Noise)
+
+# Total Claims: 5. Relevant Claims: 4. Score = 80%.
+# If the chunk is filled with 10 sentences, only 3 relevant, score drops to 30%.
+# This perfectly explains why Recall/Precision are high (chunk is relevant)
+# but Contextual Relevancy is low (the chunk is noisy).
+```
+
+---
+
+## 🛠️ Part 5: How to Fix Low Contextual Relevancy
+
+- **Reduce Chunk Size**: Smaller chunks = less noise per chunk.
+- **Reduce Overlap**: Less repetitive text.
+- **Better Chunking Strategy**: Use semantic chunking (e.g., paragraph-based instead of fixed character lengths).
+
+**Trade-off**: Reducing chunk size might reduce Recall (since the exact answer might get split). You need to experiment to find the sweet spot.
+
+---
+
+## 🚀 Part 6: What’s Next – Application-Level Evals
+
+The instructor marks **Component-Level** and **Pipeline-Level** as **COMPLETE**.
+
+**Next Session**: **Application-Level Evals** (Testing the final user experience).
+- **Correctness**: Is the factual content of the answer *correct*? (This is different from Faithfulness/Relevancy).
+- **Completeness**: Does the answer cover all parts of the question?
+- **Tone/Style**: Does the answer match the expected teaching style?
+- **Safety**: Toxicity, PII leakage, Jailbreak resistance.
+- **Operational**: Latency, Cost, Token usage.
+
+After that: **Regression Testing** (running the entire suite on every code change) and **Online Monitoring** (live production tracking).
+
+---
+
+## 📝 Final Summary Table
+
+| Concept | Key Point |
+| :--- | :--- |
+| **RAG Pipeline** | Connects `Retriever` and `Generator` into one `query()` function. |
+| **RAG Triad** | 3 metrics: Contextual Relevancy (Q↔C), Faithfulness (C↔A), Answer Relevancy (Q↔A). |
+| **Contextual Relevancy** | Measures **sentence/claim-level** relevance of retrieved context to the query. Reference-Free. |
+| **The "Curious Case"** | High Precision (chunk-level) but low Contextual Relevancy (sentence-level) indicates **noisy chunks** (too much filler text). |
+| **Fix** | Reduce **Chunk Size** to minimize noise per chunk. |
+| **DeepEval Implementation** | `LLMTestCase` uses `retrieval_context` from the **actual pipeline** (not the golden dataset) to calculate the Triad. |
+| **Next Step** | Application-Level Evals (Correctness, Completeness, Tone, Safety, Ops). |
+
+**Bottom Line**: A RAG pipeline can fetch the right documents (high Recall/Precision) but still fail at the sentence level if chunks are too large. **Contextual Relevancy** catches this granular noise. The fix is to optimize chunking parameters. You are now halfway through the Eval Suite! 🚀
+
+---
+
+## 015. Mastering G-Eval: The Deterministic LLM-as-a-Judge Framework Explained (01:26:51)
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 ---
