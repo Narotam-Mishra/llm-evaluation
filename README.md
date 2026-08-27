@@ -4258,6 +4258,211 @@ After that: **Regression Testing** (running the entire suite on every code chang
 
 ## 015. Mastering G-Eval: The Deterministic LLM-as-a-Judge Framework Explained (01:26:51)
 
+This tutorial covers the **Application-Level Evaluation** phase of the RAG Eval Suite. We move from **"Count-Based"** metrics (where we break answers into claims and count matches) to **"Judgment-Based"** metrics (where we ask an LLM to holistically judge qualities like Correctness, Completeness, and Style). 
+
+The instructor introduces **G-Eval** (a 2023 research framework) to solve the **"High Variance"** problem of naive LLM-as-a-Judge. By using **Chain-of-Thought (CoT)** to create strict evaluation rubrics and **Weighted Scoring via Log-Probabilities**, G-Eval provides stable, reliable scores across multiple runs.
+
+---
+
+## 🧩 Part 1: Count-Based vs. Judgment-Based Metrics
+
+**Recap of Previous Metrics (Count-Based)**:
+- **Recall, Precision, Faithfulness, Answer Relevancy, Contextual Relevancy**.
+- These work by breaking the answer/context into **Atomic Claims** (small factual statements), counting how many match a reference (golden context or question), and calculating a ratio.
+
+**Why Count-Based Fails for Application-Level Eval**:
+- **Correctness**: An answer can be correct *holistically* even if individual claims don't directly map to a specific golden claim (e.g., using analogies or paraphrasing).
+- **Completeness**: A question might have 3 parts. If the answer covers part 1 well but misses part 2, you can't just count words. You need to judge if the *intent* was fully covered.
+- **Style/Tone**: Does the answer sound like a CampusX teacher? This is purely subjective and cannot be broken down into claim counts. You need a **Judge** to give a score (1-5 or 0-10) based on a rubric.
+
+> **Key Point**: For these metrics, you need **Holistic Judgment**, not simple counting.
+
+---
+
+## 🚫 Part 2: The Flaw of Naive LLM-as-a-Judge (The "6 vs 8" Problem)
+
+**Naive Approach**: Feed a question, golden answer, and generated answer to an LLM. Ask: *"Score correctness from 0 to 10."*
+
+**The Problem**: **High Variance**.
+- Run 1: The judge outputs **8**.
+- Run 2: The judge outputs **6**.
+- Run 3: The judge outputs **9**.
+
+**Two Reasons for this Variance**:
+1.  **Vague Criteria**: You only gave a high-level instruction like *"Check factual accuracy"*. The LLM interprets this differently on each call. Sometimes it's strict, sometimes lenient.
+2.  **Token Probability Jitter**: When the LLM generates the score (e.g., "8"), it internally assigned probabilities: `8 (51%)`, `7 (40%)`, `9 (9%)`. It picked `8`. 
+    - On the next run, due to slight randomness/non-determinism, the probabilities shift to `7 (52%)`, `8 (40%)`. Now it picks `7`. This causes wild swings.
+
+---
+
+## 🛠️ Part 3: Introducing G-Eval (The Solution)
+
+**G-Eval** is a framework introduced in a 2023 research paper. It is NOT a new model; it's a **new way to prompt an LLM-as-a-Judge** to make it more stable and reliable.
+
+**Two Core Innovations**:
+
+1.  **Chain-of-Thought (CoT) for Rubric Generation (Strict Rules)**:
+    - Instead of giving a vague criterion, G-Eval uses CoT to break the criterion down into **specific, detailed evaluation steps**.
+    - You can even provide these steps manually (as the instructor did) to have **100% control** over the evaluation logic, removing all LLM interpretation variance.
+
+2.  **Probability-Weighted Scoring (Logprobs)**:
+    - Instead of asking the LLM to *print* a number (e.g., "8"), G-Eval asks it to output the **log-probabilities** for the top 5-10 tokens (e.g., `P(8)=0.51, P(7)=0.40, P(9)=0.09`).
+    - It normalizes these probabilities and calculates a **Weighted Average** (e.g., `8*0.51 + 7*0.40 + 9*0.09 = 7.78`).
+    - Result: The score is *continuous* and stable. A jitter in probability shifts the score by ~0.2, not by 2 whole points (6 vs 8).
+
+### 💻 Code Example 1: Simulating Naive vs. G-Eval Scoring
+
+```python
+# Simulating the 6 vs 8 problem (Naive)
+import random
+
+def naive_judge():
+    # Simulates the LLM picking the highest probability token.
+    # Probabilities fluctuate randomly between runs.
+    probs = {"8": 0.51, "7": 0.40, "6": 0.09} 
+    # Sometimes it picks 8, sometimes 7.
+    return max(probs, key=probs.get) 
+
+print(f"Naive Run 1: {naive_judge()}") # Could be 8
+print(f"Naive Run 2: {naive_judge()}") # Could be 7 (High Variance!)
+
+# Simulating G-Eval (Weighted Average)
+def geval_judge():
+    # G-Eval always extracts these probabilities.
+    probs = {"8": 0.51, "7": 0.40, "6": 0.09}
+    # Normalize (assume already normalized) and calculate weighted average.
+    weighted_score = (8 * 0.51) + (7 * 0.40) + (6 * 0.09)
+    return weighted_score
+
+print(f"G-Eval Run 1: {geval_judge():.2f}") # 7.78
+# Even if probabilities shift slightly (8:0.45, 7:0.46), score is ~7.5.
+# Variance is minimal!
+```
+
+---
+
+## 📂 Part 4: The 3 Application Metrics (Implemented via G-Eval)
+
+### A. Correctness
+- **Definition**: Is the generated answer *factually correct* in the real world, independent of the provided context?
+- **Reference**: Requires a **Golden Answer** (expert-written).
+- **G-Eval Setup**:
+    - **Evaluation Steps**: e.g., *"Compare factual claims in the actual output against the expected output. Heavily penalize contradictions."*
+    - **Rubric**: 
+        - 9-10: Fully correct.
+        - 5-8: Minor inaccuracies.
+        - 0-4: Major factual errors.
+
+### B. Completeness
+- **Definition**: Does the answer cover *all* parts of the multi-part question?
+- **Reference**: Requires a **Golden Answer** (to know what the full answer should include).
+- **G-Eval Setup**:
+    - **Evaluation Steps**: *"Check if the actual output misses any key points present in the expected output."*
+    - **Rubric**: Lower scores for omitted points.
+
+### C. Style & Tone
+- **Definition**: Does the answer match the specific teaching style (e.g., CampusX style: conversational, intuitive, explaining jargon)?
+- **Reference**: **This is Reference-Free**. You only need a rubric defining the "Style".
+- **G-Eval Setup**:
+    - **Evaluation Steps**: *"Reward intuitive explanations, plain language, and a conversational tone. Penalize dry textbook language."*
+
+---
+
+## ⚙️ Part 5: DeepEval Implementation (`GEval` Class)
+
+DeepEval has a built-in `GEval` class that automates the heavy lifting (extracting logprobs, calculating weighted averages).
+
+**Key Parameters for `GEval`**:
+1.  `name`: Name of the metric.
+2.  `evaluation_steps` (or `criteria`): The rulebook/CoT steps.
+3.  `scoring_rubric`: Explicit mapping of output quality to score ranges.
+4.  `strict_mode=False`: **Crucial**. If `True`, it ignores logprobs and uses the raw printed token. Keep it `False` to get the stable weighted average.
+
+### 💻 Code Example 2: Implementing Correctness with GEval
+
+```python
+# evals/eval_application.py
+from deepeval import evaluate
+from deepeval.metrics import GEval
+from deepeval.test_case import LLMTestCase
+from src.rag_pipeline import RAGPipeline
+
+# 1. Load Golden Dataset (Contains "question" and "ideal_answer")
+golden_data = load_golden_data()
+
+# 2. Define the G-Eval Metric for Correctness
+correctness_metric = GEval(
+    name="Correctness",
+    model="gpt-4o-mini",  # The Judge model
+    evaluation_steps=[
+        "Compare only the factual claims in the actual output against the expected output.",
+        "A claim is wrong only if it contradicts the expected output and is factually false.",
+        "Do not penalize the actual output for omitting information or being shorter."
+    ],
+    scoring_rubric={
+        "9-10": "All claims are factually correct.",
+        "5-8": "Mostly correct with minor inaccuracies.",
+        "0-4": "Major factual errors."
+    },
+    strict_mode=False  # MUST be False to use weighted logprobs!
+)
+
+# 3. Run the Pipeline and Create Test Cases
+pipeline = RAGPipeline()
+test_cases = []
+
+for item in golden_data:
+    question = item["question"]
+    ideal_answer = item["ideal_answer"]
+    
+    actual_answer = pipeline.query(question)  # This calls your RAG
+    
+    test_case = LLMTestCase(
+        input=question,
+        actual_output=actual_answer,
+        expected_output=ideal_answer
+    )
+    test_cases.append(test_case)
+
+# 4. Evaluate (The GEval automatically handles the weighted logprob calculation)
+results = evaluate(test_cases, [correctness_metric])
+```
+
+---
+
+## 🚀 Part 6: The Optimization Journey (Tweaking Prompts & Rubrics)
+
+The instructor ran the evals, analyzed failed cases, and made iterative improvements:
+
+| Metric | Baseline Score | Problem Found | Fix Applied | Final Score |
+| :--- | :--- | :--- | :--- | :--- |
+| **Correctness** | 66% | Golden answers were too detailed. Judge penalized short answers even if correct. | Modified rubric: "Do not penalize for brevity or omitted points." | **84%** |
+| **Completeness** | 68% | Generator was instructed to be *concise*, so it dropped parts of multi-part questions. | Updated System Prompt: "Address every distinct part of the question." | **75%** |
+| **Style** | 54% | Prompt had no guidance on tone. Judge expected examples/analogies *everywhere*. | Added style guidelines to prompt + modified rubric: "Analogy is a bonus, not mandatory." | **74%** |
+
+**Key Insight**: Application-level metrics are highly sensitive to **System Prompt design** and **Rubric strictness**. The iterative process of running the eval, reading the failure reasons, and tweaking the prompt/rubric is the "engine" of building a production-grade RAG system.
+
+---
+
+## 📝 Final Summary Table
+
+| Concept | Key Point |
+| :--- | :--- |
+| **Application Evals** | Test the final user experience (Correctness, Completeness, Style/Safety). |
+| **Count-Based Metrics** | Break into claims and count (e.g., Faithfulness, Recall). |
+| **Judgment-Based Metrics** | Require holistic scoring (e.g., Correctness, Style). |
+| **Naive LLM-as-a-Judge** | **Unstable** (score jumps 6-8 due to token probability jitter and vague criteria). |
+| **G-Eval (Solution)** | Two innovations: **CoT Steps** (strict rules) + **Weighted Logprobs** (stable continuous score). |
+| **DeepEval `GEval`** | Handles logprob extraction automatically if `strict_mode=False`. |
+| **Optimization Loop** | Run eval → Check failure reasons → Refine System Prompt or Rubric → Re-run. |
+| **Rubric Overfitting** | Don't over-correct (e.g., don't force analogies in every answer). Keep rubrics general but clear. |
+
+**Bottom Line**: Application-Level evaluations are all about **human-like judgment**. Since AI engineers cannot manually review thousands of answers, we use **G-Eval** – a stable, rubric-based LLM judge – to automate this process reliably. The real art lies in **crafting the rubric** and **tweaking the system prompt** based on the judge's feedback. 🚀
+
+---
+
+## 016. Securing Your RAG Application: Testing for Toxicity, Leakage & Scope Drift (01:35:18)
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 ---
