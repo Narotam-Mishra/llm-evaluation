@@ -19,7 +19,8 @@ load_dotenv(override=True)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 # faithfulness-first prompt: ground every claim in the context, abstain if unsure
-prompt = ChatPromptTemplate.from_template("""
+prompt = ChatPromptTemplate.from_template(
+    """
 You are a helpful teaching assistant for a course on LLM evaluations. Answer the student's question using ONLY the information in the context provided below.
 
 Rules:
@@ -78,7 +79,6 @@ Answer:
 
 
 chain = prompt | llm | StrOutputParser()
-
 
 def generate(query: str, context: list[str]) -> str:
     """Generate a grounded answer from the query and context chunks."""
