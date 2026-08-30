@@ -27,6 +27,15 @@ AIMessage. Same prompt, same model, real retrieved context.
 # 1. IMPORTS & ENV
 # ============================================================
 from dotenv import load_dotenv
+from pathlib import Path
+import sys
+
+# Allow this file to be run directly from any working directory. When Python
+# executes a file inside evals/, it otherwise adds only evals/ to sys.path and
+# cannot see the sibling src/ package.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.rag_pipeline import RagPipeline
 from src.generator import prompt, llm      # reuse the exact prompt + model
@@ -57,7 +66,7 @@ PRICE_OUTPUT_PER_1M       = 0.60    # output (4x input -- long answers dominate)
 
 # --- Business projection knobs (set these to YOUR reality) ---
 QUERIES_PER_DAY = 2000              # expected doubt-solver traffic
-USD_TO_INR      = 88.0              # approximate; set to the current rate
+USD_TO_INR      = 95.38              # approximate; set to the current rate
 
 # --- Budget (the "SLO" for cost): the offline pass/fail line ---
 COST_BUDGET_PER_QUERY_USD = 0.0015  # e.g. must stay under ~0.13 INR / query

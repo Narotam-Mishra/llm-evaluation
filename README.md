@@ -4693,11 +4693,333 @@ Once you detect failures via evals, you build guardrails:
 
 ## 017. RAG Operational Evals: Building Faster & Cheaper RAG Systems (01:19:31)
 
-summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
+This tutorial covers the final piece of the RAG Eval Suite: **Operational Evaluations**. After completing **Component-Level** (Retriever/Generator), **Pipeline-Level** (RAG Triad), and **Application-Level** (Quality + Safety) evals, we now focus on ensuring the system runs **fast, cheap, and reliably** at scale. The instructor covers 3 core metrics: **Latency**, **Cost**, and **Reliability**. He also addresses the crucial question: *"Why run Operational Evals OFFLINE, before deployment?"*
 
 ---
 
+## 📌 Part 1: Why Operational Evals Belong in Your Offline Suite
+
+**The "Offline vs. Online" Confusion**: Operational Evals are often associated with production monitoring. However, you **MUST** run them offline, *before* deployment.
+
+**Why?** 
+- **Differential Analysis**: The *absolute* values (e.g., latency = 4.1s) may change in production, but the *relative difference* between versions is critical.
+- **Detect Regressions**: If you upgrade to a smarter model, your quality scores go up (Correctness 91% → 95%), but your latency might spike (2.3s → 4.1s). If you don't run offline operational evals, you will deploy a slower system and only discover it when users complain.
+
+> **Key Quote**: *"Do NOT wait until production to discover your pipeline is too slow and too expensive."*
+
+---
+
+## ⚙️ Core Metric 1: Latency
+
+**Definition**: The time a system takes to respond to a request (user asks → full answer appears).
+
+### 7 Crucial Considerations for Measuring Latency
+
+1.  **Prefer Distributions over Averages**: 
+    - Don't just report the **Mean** (average). A few extremely slow requests (tail latency) can ruin the user experience.
+    - Report **Percentiles**: 
+        - **P50 (Median)**: 50% of requests are faster than this.
+        - **P95**: 95% of requests are faster than this. (Good for understanding the worst-case for most users).
+        - **P99**: 99% of requests are faster than this.
+2.  **Breakdown End-to-End Latency**: Track latency for **Retriever** (embedding + vector search) vs. **Generator** (LLM call). This tells you where to optimize.
+3.  **Track Time to First Token (TTFT)**: Measure when the *first* character appears on the screen (thanks to streaming). A fast TTFT makes the user feel the system is responsive, even if the full answer takes time.
+4.  **Watch for Cold Starts**: The first request to a server/model often takes longer due to initialization (loading models, establishing connections). **Skip the first 1-2 warmup runs** in your measurements.
+5.  **Normalize by Output Length**: Longer answers take more time to generate. Always report the average output token/character count alongside latency.
+6.  **Distinguish Latency vs. Throughput**: Latency is *one* request's speed. Throughput is how *many* requests the system can handle per second. High throughput (many users) can degrade latency.
+7.  **Run Multiple Samples**: External APIs are "noisy." Run each query 3-5 times and average the results to reduce variance. API failures (timeouts) should be tracked separately.
+
+### 💻 Code Example: Simulating Latency Metrics
+
+```python
+import time
+import numpy as np
+
+# Simulating 1000 latency measurements (in seconds) from a real system
+latencies = np.random.normal(loc=2.0, scale=0.5, size=1000) # Mean 2s, Std 0.5s
+# Inject some "tail" latency (slow outliers)
+latencies = np.append(latencies, [6.0, 7.5, 8.2, 9.0]) 
+
+# Calculate percentiles
+p50 = np.percentile(latencies, 50)
+p95 = np.percentile(latencies, 95)
+p99 = np.percentile(latencies, 99)
+
+print(f"Mean Latency: {np.mean(latencies):.2f}s")
+print(f"P50 (Median): {p50:.2f}s")
+print(f"P95: {p95:.2f}s")
+print(f"P99: {p99:.2f}s")
+print(f"Max: {np.max(latencies):.2f}s")
+
+# Output:
+# Mean: 2.15s (Looks fine)
+# P50: 2.01s (Good)
+# P95: 3.01s (Still okay)
+# P99: 8.11s (Huge spike! 1% of users have a terrible experience)
+# Max: 9.00s
+```
+
+---
+
+## 💰 Core Metric 2: Cost & Token Economics
+
+**Definition**: The monetary cost incurred per query, driven primarily by **LLM token consumption**.
+
+### Key Considerations for Cost Measurement
+
+1.  **Focus on Cost Per Query**: Not just monthly totals. 
+2.  **Breakdown Input vs. Output Costs**: They have different pricing. Output tokens are typically **3-4x more expensive** than input tokens.
+3.  **Cost Distributions**: Similar to latency, some queries are expensive. Segment by query type (simple vs. complex).
+4.  **Set a Cost Budget (SLO)**: Define a per-query cost ceiling (e.g., "Never exceed $0.002 per query").
+5.  **Prompt Caching**: Providers like OpenAI automatically cache the system prompt if you repeat the same context. You pay less for cached tokens. This is a huge cost saver.
+
+### 💻 Code Example: Calculating Cost Per Query
+
+```python
+# Pricing (Example: GPT-4o-mini)
+input_price_per_mil = 0.15   # $0.15 per 1M input tokens
+output_price_per_mil = 0.60  # $0.60 per 1M output tokens
+
+# Simulated query
+input_tokens = 400
+output_tokens = 100
+
+# Calculate cost
+input_cost = (input_tokens / 1_000_000) * input_price_per_mil
+output_cost = (output_tokens / 1_000_000) * output_price_per_mil
+total_cost_usd = input_cost + output_cost
+
+# Convert to INR
+total_cost_inr = total_cost_usd * 95
+print(f"Cost per query: ₹{total_cost_inr:.4f}") 
+# Output: ~₹0.02 (2 paise)
+
+# Simulating PROMPT CACHING
+# If 70% of input tokens are cached, you pay a discounted rate.
+cached_input_price_per_mil = 0.075 # 50% discount
+cached_tokens = 300
+non_cached_tokens = 100
+
+cached_cost = (cached_tokens / 1_000_000) * cached_input_price_per_mil
+non_cached_cost = (non_cached_tokens / 1_000_000) * input_price_per_mil
+total_input_cost = cached_cost + non_cached_cost
+
+print(f"Total Input Cost (with caching): ${total_input_cost:.5f}") # Much cheaper!
+```
+
+---
+
+## 🛡️ Core Metric 3: Reliability
+
+**Definition**: The ability of the system to successfully serve requests without errors, timeouts, or crashes.
+
+**Key Metrics**:
+- **Success Rate**: % of requests completed successfully.
+- **Error Rate**: % of requests that failed (e.g., API errors, internal exceptions).
+- **Timeout Rate**: % of requests that exceeded the allowed time limit.
+- **Retry Rate**: % of requests that required at least one retry.
+
+**Important**: 
+- **Categorize Failures**: Don't just look at a generic error rate. Break it down (e.g., "5% API errors, 3% rate limit errors").
+- **Scale Matters**: Reliability is nearly 100% on a local laptop with 20 requests. It becomes critical when you have thousands of concurrent users. Test with realistic sample sizes.
+
+### 💻 Code Example: Simulating Reliability Metrics
+
+```python
+import random
+
+# Simulate 1000 requests
+total_requests = 1000
+successes = 0
+errors = 0
+timeouts = 0
+retries = 0
+
+for i in range(total_requests):
+    # Simulate failure scenarios
+    if random.random() < 0.02:  # 2% overall failure rate
+        errors += 1
+        if random.random() < 0.1:  # 10% of failures are retries
+            retries += 1
+    elif random.random() < 0.01:  # 1% timeout
+        timeouts += 1
+    else:
+        successes += 1
+
+success_rate = (successes / total_requests) * 100
+error_rate = (errors / total_requests) * 100
+timeout_rate = (timeouts / total_requests) * 100
+retry_rate = (retries / total_requests) * 100
+
+print(f"Success Rate: {success_rate:.1f}%")
+print(f"Error Rate: {error_rate:.1f}%")
+print(f"Timeout Rate: {timeout_rate:.1f}%")
+print(f"Retry Rate: {retry_rate:.1f}%")
+# In production, retry rates above 5% are a red flag.
+```
+
+---
+
+## 📊 Summary Table of Operational Evals
+
+| Metric | Definition | Key Considerations | How to Optimize |
+| :--- | :--- | :--- | :--- |
+| **Latency** | Time to respond. | Measure P50, P95, P99. Break down by component (Retriever/Generator). Track TTFT. Skip cold starts. | Faster model, smaller context, caching, better infrastructure (region proximity). |
+| **Cost** | Money per query. | Measure per-query cost. Break down input/output. Set a budget. | Cheaper model, prompt caching, smaller context, concise system prompt. |
+| **Reliability** | Ability to serve without errors. | Success rate, Error rate, Timeout rate. Categorize failures. | Better error handling (retries), rate limit management, robust infrastructure. |
+
+---
+
+## 📝 Final Summary / Key Takeaways
+
+1.  **Operational Evals are Essential Offline**: They prevent you from deploying a system that is slower or more expensive than the previous version. The *differential* (change) matters most.
+2.  **Latency is a Distribution, Not a Number**: Always report P95 and P99 to capture the "bad" user experiences.
+3.  **Cost Comes from Tokens**: Optimize input size (context) and output length (generation). Use prompt caching.
+4.  **Reliability Scales with Users**: Your 100% success rate on a laptop will drop under heavy load. Be prepared to monitor and handle rate limits, timeouts, and API errors.
+5.  **The Eval Suite is Now Complete!** We have built:
+    - **Component Evals**: Retriever & Generator.
+    - **Pipeline Evals**: RAG Triad.
+    - **Application Evals**: Quality, Safety, and now Operations.
+6.  **Next Step**: **Regression Testing** – automating the entire suite into a CI/CD pipeline to block bad deployments.
+
+---
+
+### Cost evaluation (`evals/eval_cost.py`)
+
+`eval_cost.py` is an offline operational evaluation for the RAG application. It
+does not use a golden answer or an LLM judge. Instead, it runs representative
+questions through the real retriever and model, reads the model's reported token
+usage, and derives an estimated API cost from the configured prices.
+
+This answers a product question such as: “What does one answer cost, and what
+would that cost at 2,000 queries per day?” Token counts are relatively stable
+when retrieval and generation settings are stable, so this is useful for
+pre-launch unit-economics estimates. It is not a replacement for production
+billing or observability.
+
+#### Prerequisites and command
+
+The project needs a populated vector store, the dependencies from
+`13_rag_eval_project`, and an `OPENAI_API_KEY` available through its `.env`
+file/environment. The first run may also download the reranker model.
+
+Run the evaluator from the RAG project directory:
+
+```bash
+cd 13_rag_eval_project
+uv run python evals/eval_cost.py
+```
+
+If the environment was installed without `uv`, run the same command using the
+project's active Python interpreter instead:
+
+```bash
+python evals/eval_cost.py
+```
+
+#### How it works, step by step
+
+1. **Make project modules importable.** The script resolves the directory above
+   `evals/` and adds it to `sys.path`. This means the evaluator can be launched
+   directly from any working directory while still importing `src`.
+
+2. **Load configuration and reuse the production components.** It loads `.env`,
+   creates `RagPipeline()`, and imports `prompt` and `llm` from
+   `src/generator.py`. Therefore the measurement uses the same retriever,
+   system prompt, model (`gpt-4o-mini`), and temperature (`0`) as generation.
+
+3. **Preserve the response metadata.** The normal generator chain is
+   `prompt | llm | StrOutputParser()`. `StrOutputParser()` returns only text,
+   which discards the `AIMessage` containing usage data. The evaluator instead
+   builds `measured_chain = prompt | llm`, stopping before the parser so that
+   `msg.usage_metadata` remains available.
+
+4. **Retrieve real context for every question.** For each item in `QUESTIONS`,
+   `measure_tokens()` calls `pipeline.retriever.invoke(question)`. The
+   retriever over-fetches candidates, reranks them, and returns its top
+   documents. Their `page_content` values are joined with blank lines into the
+   `context` supplied to the prompt. This is important: prompt-token cost
+   reflects the actual RAG context, rather than an artificial sample string.
+
+5. **Generate one answer and collect token counts.** The chain receives
+   `{"question": question, "context": context_text}`. From the resulting
+   `AIMessage`, the code records:
+
+   - `input_tokens`: tokens in the prompt, including instructions, question,
+     and retrieved context;
+   - `output_tokens`: tokens generated in the answer; and
+   - `input_token_details.cache_read`: input tokens served from a provider
+     prompt cache, when that field is reported. Missing metadata safely becomes
+     `0`.
+
+6. **Repeat the sample.** Each question is measured `REPEATS` times (currently
+   `3`), so the report contains `len(QUESTIONS) * REPEATS` samples. Repeats help
+   show the small run-to-run variation in token usage.
+
+7. **Convert tokens to USD.** `cost_usd()` first prevents invalid negative
+   uncached input with `max(input_tokens - cached_tokens, 0)`, then calculates:
+
+   ```text
+   uncached input cost = uncached_input_tokens / 1,000,000 × PRICE_INPUT_PER_1M
+   cached input cost   = cached_tokens / 1,000,000 × PRICE_CACHED_INPUT_PER_1M
+   output cost         = output_tokens / 1,000,000 × PRICE_OUTPUT_PER_1M
+   total cost          = uncached input + cached input + output
+   ```
+
+   Cached tokens are charged separately because a repeated prompt prefix can be
+   cheaper than uncached input. The configured rates are assumptions, not live
+   pricing data; update them from the provider's current pricing page before
+   using a report for a budget decision.
+
+8. **Aggregate and print the report.** `report()` calculates average input,
+   output, cached tokens, average/min/max cost per query, and the percentage of
+   the average bill caused by output tokens. It also converts the average cost
+   to INR using `USD_TO_INR`.
+
+9. **Project traffic and enforce a budget.** The script multiplies the average
+   cost per query by `QUERIES_PER_DAY`, then by 30 for a monthly estimate. It
+   prints `PASS` when the average is at or below
+   `COST_BUDGET_PER_QUERY_USD`; otherwise it prints `FAIL`.
+
+#### Configuration to review before running
+
+| Setting | Purpose |
+| --- | --- |
+| `QUESTIONS` | Representative traffic to measure. Replace or expand these as product traffic changes. |
+| `REPEATS` | Measurements per question; increase it when checking variability. |
+| `PRICE_INPUT_PER_1M`, `PRICE_CACHED_INPUT_PER_1M`, `PRICE_OUTPUT_PER_1M` | Provider rates used by the formula. Keep these current. |
+| `QUERIES_PER_DAY` | Assumed daily traffic for the projection. |
+| `USD_TO_INR` | Exchange-rate assumption used only for INR display. |
+| `COST_BUDGET_PER_QUERY_USD` | Per-query SLO used for the `PASS`/`FAIL` verdict. |
+
+#### Reading the output
+
+```text
+samples                : 12
+avg input tokens       :     2400   (1800 cached)
+avg output tokens      :      220
+avg cost / query       : $0.0002   (Rs 0.0191)
+   min / max           : $... / $...
+   input vs output     : 45% input / 55% output
+projection @ 2000/day  :
+   per day             : $...
+   per month           : $...
+BUDGET: cost/query <= $0.001500  ->  $...   [PASS]
+```
+
+The values above are illustrative. A high cached-token count means the provider
+reported cache reuse; it is not guaranteed for every request or provider. The
+reported total covers model token charges only. It excludes embedding,
+vector-database, reranker/compute, storage, networking, and any platform fees,
+so use it as a focused generation-cost estimate rather than a complete system
+cost.
+
+---
+
+summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
+
 - [Notes](https://onedrive.live.com/personal/85452F67DAA1111C/_layouts/15/Doc.aspx?sourcedoc={90714588-0955-47bc-bf9e-176879959e0d}&action=view&redeem=aHR0cHM6Ly8xZHJ2Lm1zL28vYy84NTQ1MkY2N0RBQTExMTFDL0lnQ0lSWEdRVlFtOFI3LWVGMmg1bFo0TkFheWVYXzlSM1Y0WEhERG1zWFlNbnJr&wd=target%281.%20Introduction%20to%20LLM%20Evals.one%7Ca35dbc27-08ab-4743-b3b0-6b36c29acfd5%2FCourse%20Outline%7C165aacba-2851-e54b-bf9f-885a1a42b9ee%2F%29&wdorigin=NavigationUrl)
+
+---
 
 
 
