@@ -5015,6 +5015,173 @@ cost.
 
 ---
 
+## 018. RAG Regression Testing Explained: How to Prevent Silent AI Failures (54:15)
+
+This tutorial covers the final piece of the RAG Evaluation journey: **Regression Testing**. After building a comprehensive 14-metric evaluation suite across Quality, Safety, and Operations, we now learn how to **automate the entire suite** to detect regressions whenever we make changes to our RAG system. The instructor demonstrates a complete workflow from baseline capture, candidate evaluation, comparison with noise-aware thresholds, and a decision framework for promotion or rejection.
+
+---
+
+## 🎯 Part 1: What is Regression Testing?
+
+**Regression** means **returning to a previous, worse state**. In software, a regression occurs when a new change unintentionally degrades existing functionality.
+
+**For RAG systems:** You might improve one metric (e.g., Recall) by increasing `k` or adding a reranker, but inadvertently hurt others (e.g., Precision, Latency, or Safety). **Regression testing** catches these side‑effects.
+
+### The Simple Workflow
+
+1. **Run the full Eval Suite** on your current system → save results as **Baseline**.
+2. **Make a change** (e.g., tune chunk size, swap model, update prompt).
+3. **Run the exact same Suite** again → save results as **Candidate**.
+4. **Compare** Baseline vs. Candidate per metric.
+5. **Decide** whether to promote (deploy) the change, reject it, or review further.
+
+---
+
+## 🧠 Part 2: Two Key Challenges
+
+### Challenge 1: Metrics Have Different Directions
+- **Higher is better:** Faithfulness, Recall, Precision, Answer Relevancy, etc.
+- **Lower is better:** Latency, Cost, Toxicity, PII Leakage, etc.
+- You must know the **direction** of each metric to interpret a change correctly.
+
+### Challenge 2: LLM‑as‑a‑Judge Introduces Noise
+Even with **no code changes**, running the same evals twice yields slightly different scores because LLM judges are probabilistic (e.g., Faithfulness 85.6% → 84.8%). This noise can falsely flag a regression.
+
+**Solution:** Establish a **Noise Threshold** per metric.
+- Run the entire suite **5–10 times** on the same configuration.
+- For each metric, compute the **standard deviation (σ)** of its scores.
+- Set the noise threshold to **2×σ** (or a value you choose).
+- Only changes **larger than the threshold** are considered real regressions or improvements.
+
+---
+
+## 🛠️ Part 3: Implementing the Regression Pipeline (Code Architecture)
+
+The instructor refactors the existing codebase to support automated regression testing.
+
+### 1. Consolidate Evals into Single Files
+- **Quality Evals:** Previously 4 separate files (Retriever, Generator, Pipeline, Application). They are kept separate but wrapped with a **harness** to standardise input/output.
+- **Safety Evals:** Merged into `eval_safety.py` (Toxicity, PII Leakage, Scope Adherence).
+- **Ops Evals:** Merged into `eval_ops.py` (Latency, Cost, Reliability).
+
+### 2. The Orchestrator: `run_suite.py`
+This single script runs **all** evals sequentially and saves the results in a structured JSON file.
+- First run → creates `baseline.json`.
+- Subsequent runs → creates `candidate.json`.
+
+### 3. The Metric Registry: `metric_registry.py`
+Stores for each metric:
+- **Direction**: `+1` if higher is better, `-1` if lower is better.
+- **Noise Threshold**: The maximum allowed fluctuation (e.g., 0.5 points).
+
+Example registry entry:
+```python
+METRIC_REGISTRY = {
+    "faithfulness": {"direction": 1, "noise_threshold": 0.5},
+    "contextual_relevancy": {"direction": 1, "noise_threshold": 0.8},
+    "toxicity": {"direction": -1, "noise_threshold": 0.2},
+    "pii_leakage": {"direction": -1, "noise_threshold": 0.3},
+    "latency_p95": {"direction": -1, "noise_threshold": 0.5},
+    # ... etc.
+}
+```
+
+### 4. The Comparator: `compare.py`
+Reads `baseline.json`, `candidate.json`, and the registry.  
+For each metric, it:
+- Calculates the **delta** (candidate – baseline).
+- Checks if `abs(delta)` > `noise_threshold`.
+- If yes and `delta * direction` is positive → **Improvement**.
+- If yes and `delta * direction` is negative → **Regression**.
+- Otherwise → **Stable / No significant change**.
+
+### 5. (Optional) Promotion Decision: `promote.py`
+A simple decision framework that flags critical regressions (e.g., safety metrics dropping) and decides to **Block**, **Review**, or **Promote** the change.
+
+---
+
+## 💻 Code Example: Comparison Logic with Noise Threshold
+
+```python
+def compare_metrics(baseline, candidate, registry):
+    results = {}
+    for metric, base_val in baseline.items():
+        cand_val = candidate.get(metric)
+        if cand_val is None:
+            continue
+        delta = cand_val - base_val
+        direction = registry[metric]["direction"]
+        threshold = registry[metric]["noise_threshold"]
+        
+        if abs(delta) <= threshold:
+            status = "stable"
+        else:
+            # direction: +1 means higher is better
+            # delta * direction > 0 => improvement; < 0 => regression
+            if delta * direction > 0:
+                status = "improvement"
+            else:
+                status = "regression"
+        results[metric] = {"delta": delta, "status": status}
+    return results
+```
+
+---
+
+## 🧪 Part 4: Live Demo – Changing Chunk Size
+
+The instructor changed the chunk size from **1500** to **500** (and overlap from 100 to 100) to improve Contextual Relevancy.
+
+**After running the full suite, the comparison report showed:**
+
+| Metric | Baseline | Candidate | Delta | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Contextual Relevancy** | 45% | 38% | **-7%** | ❌ **Regression** |
+| **PII Leakage** | 20% | 6% | **-14%** | ❌ **Regression** (safety drop!) |
+| **Faithfulness** | 92% | 94% | +2% | ✅ Improvement |
+| **Answer Relevancy** | 86% | 88% | +2% | ✅ Improvement |
+| ... others stable or improved.
+
+**Key Insight**: The intended goal (improving Contextual Relevancy) backfired – it **decreased**, and a **safety metric** (PII Leakage) also worsened. This is a clear sign to **reject** the change.
+
+The `promote.py` script, following its logic, **blocked** deployment because a critical safety metric regressed significantly.
+
+---
+
+## 📈 Part 5: Real‑World Tooling
+
+In production, regression testing is often powered by dedicated tools:
+
+- **MLflow** (for experiment tracking, metric logging, and visual comparison).
+- **Confident AI** (DeepEval’s enterprise platform).
+- **Weights & Biases** (W&B) for dashboards.
+
+However, the **conceptual workflow** remains identical: baseline → candidate → compare with noise thresholds → decide. The instructor intentionally avoided vendor lock‑in by using plain Python, so you can adopt any tool later.
+
+---
+
+## 📊 Part 6: Summary of Key Pointers
+
+| Concept | Explanation |
+| :--- | :--- |
+| **Regression Testing** | Ensuring new changes don’t degrade any existing metric. |
+| **Baseline** | First run of the full eval suite, saved as `baseline.json`. |
+| **Candidate** | Run after making changes, saved as `candidate.json`. |
+| **Noise Threshold** | Accounts for LLM‑judge variability; computed from standard deviation of multiple runs on the same config. |
+| **Metric Direction** | Higher‑is‑better vs. lower‑is‑better; must be stored per metric. |
+| **Comparison Logic** | Compare delta to noise threshold; if delta exceeds threshold, check direction to decide improvement or regression. |
+| **Orchestration** | `run_suite.py` runs all evals; `compare.py` performs comparison; `promote.py` adds decision logic. |
+| **CI/CD Integration** | This entire pipeline can be triggered on every Git push via GitHub Actions, enabling automated release gates. |
+| **Next Step** | **Online Evals** (post‑deployment monitoring) – the final piece to close the loop. |
+
+---
+
+## 🔚 Final Takeaway
+
+Regression testing is the **glue** that turns your disparate evaluation metrics into a **production‑ready quality gate**. It prevents the common pitfall of fixing one thing while breaking others. By automating the suite and using noise‑aware thresholds, you gain confidence that every deployed change is a net improvement.
+
+---
+
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
 - [Notes](https://onedrive.live.com/personal/85452F67DAA1111C/_layouts/15/Doc.aspx?sourcedoc={90714588-0955-47bc-bf9e-176879959e0d}&action=view&redeem=aHR0cHM6Ly8xZHJ2Lm1zL28vYy84NTQ1MkY2N0RBQTExMTFDL0lnQ0lSWEdRVlFtOFI3LWVGMmg1bFo0TkFheWVYXzlSM1Y0WEhERG1zWFlNbnJr&wd=target%281.%20Introduction%20to%20LLM%20Evals.one%7Ca35dbc27-08ab-4743-b3b0-6b36c29acfd5%2FCourse%20Outline%7C165aacba-2851-e54b-bf9f-885a1a42b9ee%2F%29&wdorigin=NavigationUrl)
