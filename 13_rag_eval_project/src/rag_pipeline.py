@@ -6,7 +6,7 @@ or directly as ``python src/rag_pipeline.py``.
 
 import sys
 from pathlib import Path
-
+from langsmith import traceable
 
 # When this file is executed directly, Python adds ``src/`` rather than the
 # project directory to sys.path. Add the project directory so the ``src``
@@ -23,6 +23,7 @@ class RagPipeline:
         # one retriever instance — loads the store + reranker model once
         self.retriever = RerankingRetriever(fetch_k=fetch_k, top_k=top_k)
 
+    @traceable(run_type="chain", name="RagPipeline")
     def invoke(self, query: str) -> dict:
         # 1. RETRIEVE: over-fetch then rerank down to top_k Documents
         docs = self.retriever.invoke(query)
@@ -44,7 +45,7 @@ class RagPipeline:
 # quick manual smoke test: python -m src.rag_pipeline
 if __name__ == "__main__":
     rag = RagPipeline()
-    result = rag.invoke("what is drift and why does it matter after deployment?")
+    result = rag.invoke("what is Agentic development?")
     print("QUERY:  ", result["query"])
     print("ANSWER: ", result["answer"])
     print("\nCONTEXT CHUNKS:")

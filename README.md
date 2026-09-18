@@ -5184,6 +5184,426 @@ Regression testing is the **glue** that turns your disparate evaluation metrics 
 
 ## 019. Online RAG Evaluation: Monitoring Production LLMs with LangSmith with Code Demo (1:14:23)
 
+# Online Evaluations for RAG Systems — Complete Summary
+
+This transcript covers the **final session** of the RAG Evaluation series: **Online Evaluations**. After building a 14-metric offline eval suite and automating it for regression testing, we now learn how to **monitor and evaluate a deployed RAG application in production** using **LangSmith**.
+
+---
+
+## 📌 Part 1: Why Online Evals Are Different — The Reference Constraint
+
+**The Hard Truth**: You **cannot** run all 14 offline metrics online. The biggest blocker is **the absence of a reference (correct answer)**.
+
+### Metrics That Can Run Online vs. Cannot
+
+| Metric | Needs Reference? | Can Run Online? |
+| :--- | :--- | :--- |
+| **Contextual Recall** | ✅ Yes (needs correct chunks) | ❌ No |
+| **Contextual Precision** | ✅ Yes | ❌ No |
+| **Correctness** | ✅ Yes (needs correct answer) | ❌ No |
+| **Completeness** | ✅ Yes | ❌ No |
+| **Faithfulness** | ❌ Reference-Free | ✅ Yes |
+| **Answer Relevancy** | ❌ Reference-Free | ✅ Yes |
+| **Contextual Relevancy** | ❌ Reference-Free | ✅ Yes |
+| **Style** | ❌ Reference-Free | ✅ Yes |
+| **Toxicity** | ❌ Reference-Free | ✅ Yes |
+| **PII Leakage** | ❌ Reference-Free | ✅ Yes |
+| **Scope Adherence** | ❌ Reference-Free | ✅ Yes |
+| **Latency** | N/A (just logged) | ✅ Yes |
+| **Cost** | N/A (just logged) | ✅ Yes |
+| **Reliability** | N/A (just logged) | ✅ Yes |
+
+**Why?** In production, users ask questions you never anticipated. You have no ground truth. Only **reference-free metrics** and **logged operational metrics** can be computed live.
+
+### The Chosen Online Eval Suite (6 Metrics)
+
+| Category | Metrics Selected |
+| :--- | :--- |
+| **Quality (RAG Triad)** | Contextual Relevancy, Faithfulness, Answer Relevancy |
+| **Safety** | Toxicity (representative of Safety; others can be added similarly) |
+| **Operations** | Latency, Cost |
+
+*(Style was excluded because it doesn't drift much. Reliability was excluded because it requires tools like Grafana/Prometheus, out of scope.)*
+
+---
+
+## 🔌 Part 2: Connecting Your Application to LangSmith
+
+**Step 1: Create a LangSmith Project**
+- Go to `smith.langchain.com` → Tracing → Create new application (e.g., `CX Doubt Solver`).
+
+**Step 2: Generate API Key and Configure `.env`**
+```bash
+# .env file
+OPENAI_API_KEY=sk-...
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+LANGCHAIN_API_KEY=ls__...
+LANGCHAIN_PROJECT=CX Doubt Solver
+```
+
+**Step 3: Install LangSmith**
+```bash
+uv add langsmith
+```
+
+**Step 4: Run Your Pipeline** — LangSmith automatically captures traces (input, output, latency, cost) behind the scenes. No code changes needed for basic tracing.
+
+---
+
+## 🔍 Part 3: The Missing Retriever Problem & Explicit Tracing
+
+### The Problem
+After connecting to LangSmith, the trace only showed:
+- Prompt Template → LLM Call → String Output Parser
+
+**The Retriever step was missing!** This meant the latency value (4.14s) was **underestimated** because retrieval time wasn't counted.
+
+### The Solution: `@traceable` Decorator
+Explicitly tell LangSmith to trace the retriever and reranker.
+
+```python
+# src/rag_pipeline.py
+from langsmith import traceable
+
+class RAGPipeline:
+    @traceable(name="rag_pipeline")   # Explicit name for this trace
+    def invoke(self, question):
+        context = self.retriever.invoke(question)
+        answer = self.generator(question, context)
+        return answer, context
+
+# src/reranker.py
+from langsmith import traceable
+
+class RerankingRetriever:
+    @traceable(name="retriever")      # Names the reranking step as "retriever"
+    def invoke(self, query):
+        docs = self.base_retriever.invoke(query)
+        return self.reranker.rerank(query, docs)
+```
+
+**Result**: The trace now shows `rag_pipeline` → `retriever` → `chat_prompt` → `chat_openai` → `string_output_parser`. Latency now correctly shows **4.79s** (includes retrieval time).
+
+**Key Insight**: If something isn't traced implicitly, add the `@traceable` decorator. Traces are hierarchical, never duplicated.
+
+---
+
+## 📊 Part 4: Simulating Production Traffic
+
+Since we aren't actually deployed, we manually run the pipeline with **different questions** to generate multiple traces:
+
+```python
+questions = [
+    "What is GSM 8K?",
+    "What is MMLU?",
+    "Why do we need LLM Evals?",
+    "What are Online Evals?",
+    "What is the difference between Model Evals and Application Evals?",
+    "What are Benchmarks?",
+    "What are Golden Datasets?"
+]
+
+for q in questions:
+    pipeline.invoke(q)
+```
+
+This simulates real user traffic. In production, every real user query becomes a trace automatically.
+
+---
+
+## 📈 Part 5: Building Custom Monitoring Dashboards
+
+### Why Custom Dashboards?
+LangSmith provides a prebuilt dashboard, but a **custom dashboard** lets you focus on the metrics that matter for YOUR app.
+
+### Step 1: Create the Dashboard
+- Monitoring → Custom → Create Dashboard → Name it "CX Doubt Solver Dashboard".
+
+### Step 2: Add a P95 Latency Chart
+- Click "+ Chart" → Name: `Latency P95`
+- Select Project: `CX Doubt Solver`
+- Metric: `Latency` → Select **Percentile** → **P95**
+- Set time window: Last 1 hour
+
+### Step 3: Add an Average Cost Chart
+- Click "+ Chart" → Name: `Average Cost`
+- Metric: `Cost` → Select **Average**
+- (You can also break down Input Cost vs. Output Cost separately)
+
+### Step 3: Add Quality Metric Charts (Faithfulness, Answer Relevancy, Contextual Relevancy)
+- Click "+ Chart" → Metric: `Feedback` → Select `answer_relevancy` (or other DeepEval metric names)
+- Select **Average** or **Percentile**
+
+### 💡 P95 Latency vs. Average Latency — Important Discussion
+- **P95 Latency** = Tail latency (worst-case for 5% of users). Captures "sad users" who waited a long time.
+- **Average Latency** = Represents the general population.
+- **LangSmith's alerting limitation**: Alerts can only be set on **Average Latency**, not P95. The reasoning is that P95 represents outliers, and you might not want to alert on outliers. However, P95 is more important for user experience (tail latency).
+
+---
+
+## 🚨 Part 6: Setting Up Production Alerts
+
+### Alert on Latency
+1. Go to **Alerts** → Create Alert
+2. Name: `Latency P95`
+3. Metric: `Latency` → Condition: `> 8 seconds` in the last **60 minutes**
+4. Action: Connect **Slack** → Sends a Slack message when triggered
+
+### Alert on Cost
+- Metric: `Total LLM Cost` → Condition: `> $5` in the last 60 minutes
+
+**Important**: The threshold comes from your **SLO (Service Level Objective)**. For example:
+- Research assistant (slow is okay) → 60 seconds is fine
+- Live cricket score chatbot → 3 seconds max
+
+---
+
+## 🛡️ Part 7: Online Safety Evals — Toxicity via LangSmith
+
+### Two Options for Safety Evals
+1. **Use your own DeepEval code** (from offline suite) via the background polling service.
+2. **Use LangSmith's built-in evaluators** (PII Leakage, Prompt Injection, Toxicity).
+
+**The instructor chose option 2 for Toxicity** — reasoning: LangSmith's researchers likely built a better evaluator than we could, and the end goal (detect toxicity) matters more than the implementation.
+
+### Setup Steps
+1. Go to **Evaluators** → Select **Toxicity** (from Safety category)
+2. Name: `Toxicity`
+3. Select Judge Model: `GPT-5.6 Tera` (or any model)
+4. **Sampling Rate**: This is crucial — see below
+5. Select **Tracing** (not Datasets) → Makes it an **online** evaluator
+6. Add your OpenAI API key
+7. Click Save
+
+### 💡 Sampling Rate — Critical for Cost Control
+- **100% Sampling** = Every single trace gets evaluated. If you have 50,000 daily queries, your judge LLM runs 50,000 times/day → **Very expensive**.
+- **30% Sampling** = Randomly pick 30% of traces → 15,000 evaluations/day → Still statistically representative but much cheaper.
+- **The instructor set it to 100% for demo purposes**, but in production, you'd sample based on your budget.
+
+### How It Works Behind the Scenes
+1. Every new trace triggers the evaluator (after ~2-3 minutes delay)
+2. The LLM judge scores the response for toxicity (0-100)
+3. A score of **0 = not toxic**, **100 = extremely toxic**
+4. The reason is also provided ("Response is explanatory and professional. Contains no personal attacks.")
+
+**Key Point**: We only evaluate the **output** (our system's response), not the input. Users can ask anything; what matters is how our system responds.
+
+---
+
+## ⭐ Part 8: Online Quality Evals — MUST Use Same Offline Evaluator
+
+### The Critical Rule
+> **For Quality Metrics (Faithfulness, Answer Relevancy, Contextual Relevancy), you MUST use the SAME evaluator (DeepEval) in both offline and online setups.**
+
+### Why?
+If you use DeepEval offline and LangSmith's evaluator online:
+- Offline Contextual Relevancy = 45%
+- Online Contextual Relevancy = 55%
+
+**These numbers are NOT comparable!** Different prompts, different calculation methods, different baseline. You can't tell if your system improved or degraded.
+
+**But** if you use DeepEval for both:
+- Offline = 45%
+- Online = 38%
+→ Now you know your system is performing **worse** in production.
+
+### The Exception: Toxicity
+Toxicity is different because:
+- The goal is to **minimize** it (lower = better)
+- You're using the same DeepEval evaluator offline and the same LangSmith evaluator online
+- Since both measure "how toxic is this?", the numbers are comparable
+- Also, the instructor wanted to demonstrate how to use LangSmith's built-in evaluators.
+
+---
+
+## 🔄 Part 9: Background Polling Service — Running Offline Evals Online
+
+### The Flow
+Since we can't use LangSmith's evaluator for quality, we need a way to run our **DeepEval offline evaluators** on **live traces**.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    PRODUCTION SERVER                         │
+│                                                              │
+│  ┌──────────────┐    ┌─────────────────────────────────┐   │
+│  │   RAG App    │───▶│        LangSmith Tracing        │   │
+│  │  (Deployed)  │    │   (Captures every trace)        │   │
+│  └──────────────┘    └──────────────┬──────────────────┘   │
+│                                      │                       │
+│                                      ▼                       │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │           CRON JOB (Every 5 minutes)                 │   │
+│  │                                                       │   │
+│  │  1. Fetch last 5 minutes of traces from LangSmith    │   │
+│  │  2. Run DeepEval evaluators on each trace            │   │
+│  │  3. Send scores back to LangSmith                    │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### The Code (`eval_online.py`)
+
+```python
+import time
+from langsmith import Client
+from deepeval.metrics import (
+    FaithfulnessMetric,
+    AnswerRelevancyMetric,
+    ContextualRelevancyMetric
+)
+from deepeval.test_case import LLMTestCase
+
+# Setup
+PROJECT_NAME = "CX Doubt Solver"
+POLLING_INTERVAL_SECONDS = 60
+SAMPLE_RATE = 1.0  # 100%
+
+# Judge model (same as offline)
+JUDGE_MODEL = "gpt-4o-mini"
+
+# Metrics (same as offline)
+metrics = [
+    FaithfulnessMetric(threshold=0.7, model=JUDGE_MODEL),
+    AnswerRelevancyMetric(threshold=0.7, model=JUDGE_MODEL),
+    ContextualRelevancyMetric(threshold=0.7, model=JUDGE_MODEL)
+]
+
+client = Client()
+
+def score_recent_traces():
+    """Fetch recent traces and run evals on them."""
+    # 1. Fetch traces from last polling interval
+    runs = client.list_runs(
+        project_name=PROJECT_NAME,
+        start_time=...  # last 60 seconds
+    )
+    
+    for run in runs:
+        # 2. Extract question, answer, context from trace
+        test_case = LLMTestCase(
+            input=run.inputs["question"],
+            actual_output=run.outputs["answer"],
+            retrieval_context=run.outputs["context"]
+        )
+        
+        # 3. Run each metric
+        for metric in metrics:
+            metric.measure(test_case)
+            # 4. Send score back to LangSmith
+            client.create_feedback(
+                run_id=run.id,
+                key=metric.__class__.__name__,
+                score=metric.score,
+                reason=metric.reason
+            )
+            print(f"{metric.__class__.__name__}: {metric.score}")
+
+# Infinite loop (simulates cron job for demo)
+while True:
+    print("Polling traces...")
+    score_recent_traces()
+    time.sleep(POLLING_INTERVAL_SECONDS)
+```
+
+### Running It
+```bash
+python -m evals.eval_online
+```
+
+This runs forever (until you close the terminal). In production, a **cron job** would trigger this every 5 minutes.
+
+### Live Demo Observations
+- New traces appear in LangSmith immediately (tracing)
+- Toxicity scores appear after ~2-3 minutes (LangSmith's built-in evaluator)
+- DeepEval quality scores (Faithfulness, Answer Relevancy, Contextual Relevancy) appear after the polling service runs
+- All scores are logged as **feedback** on the trace
+
+---
+
+## 🔄 Part 10: Closing the Flywheel — Failed Traces → Golden Dataset
+
+### The Self-Improving Loop
+This is the most important concept for continuous improvement:
+
+1. **Production failure**: A user asks a question and gets a bad response.
+2. **Identify the failure**: Low scores on Faithfulness, Contextual Relevancy, etc.
+3. **Add to Golden Dataset**: Click "Add to Dataset" in LangSmith.
+4. **Provide reference answer**: An expert writes the correct answer.
+5. **Future offline evals**: The updated Golden Dataset catches this failure.
+
+### How To Do It in LangSmith
+1. Go to the failed trace.
+2. Click **"Add to Dataset"**.
+3. Select or create a dataset (e.g., "CX Doubt Solver Goldens").
+4. Add a **reference answer** (the correct answer written by an expert).
+5. Click Submit.
+6. The question + reference answer is now part of the dataset.
+
+### Why LangSmith Datasets Are Better
+- **Single source of truth**: Same dataset can be loaded for offline and online evals.
+- **Versioning**: You can see how your dataset grew over time. Roll back to a 6-month-old version if needed.
+- **SDK integration**: Load directly into your offline eval scripts.
+
+```python
+# Load dataset from LangSmith in offline eval
+from langsmith import Client
+client = Client()
+dataset = client.get_dataset("CX Doubt Solver Goldens")
+examples = client.list_examples(dataset_id=dataset.id)
+
+for ex in examples:
+    test_case = LLMTestCase(
+        input=ex.inputs["question"],
+        expected_output=ex.outputs["reference_answer"]
+    )
+    # ... run offline evals
+```
+
+---
+
+## 📋 Part 11: Summary of the Complete Online Eval Setup
+
+| Step | What We Did | Tool |
+| :--- | :--- | :--- |
+| **1** | Connected app to LangSmith | `.env` config |
+| **2** | Fixed missing retriever traces | `@traceable` decorators |
+| **3** | Simulated traffic | Multiple pipeline runs |
+| **4** | Built custom dashboard | LangSmith Monitoring |
+| **5** | Added P95 latency chart | Custom chart |
+| **6** | Added average cost chart | Custom chart |
+| **7** | Created latency alert | Alerts → Slack |
+| **8** | Created cost alert | Alerts → Slack |
+| **9** | Configured toxicity evaluator | LangSmith built-in |
+| **10** | Set sampling rate | LangSmith evaluator config |
+| **11** | Built background polling service | `eval_online.py` |
+| **12** | Added quality charts | Custom charts |
+| **13** | Demonstrated self-improving loop | "Add to Dataset" |
+
+---
+
+## 🎯 Key Takeaways
+
+1. **Reference Constraint**: Only reference-free metrics can run online. Quality metrics (Correctness, Completeness, Recall, Precision) cannot.
+
+2. **Explicit Tracing**: If LangSmith doesn't capture something (like the retriever), add `@traceable` decorators.
+
+3. **Same Evaluator for Quality**: Offline and online quality metrics must use the **same** evaluator (DeepEval). Otherwise, numbers aren't comparable.
+
+4. **Sampling Saves Money**: Don't run LLM-as-a-Judge on 100% of traces. Sample strategically (e.g., 30%).
+
+5. **Alerts are SLO-Driven**: Thresholds come from your business use case, not arbitrary numbers.
+
+6. **The Flywheel**: Production failures → Golden Dataset → Better offline evals → Better production system. This loop never ends.
+
+7. **Custom Dashboards > Prebuilt**: Build a dashboard that shows the metrics that matter for YOUR app.
+
+8. **The Whole Eval Journey is Complete**:
+   - **Offline**: Component → Pipeline → Application → Regression Testing
+   - **Online**: Tracing → Dashboards → Alerts → Safety Evals → Quality Evals → Self-Improving Loop
+
+---
 
 summaries this LLM Evaluation tutorial transcript in simple words with all detail, make note of all important pointers and also explain each important concepts with basic code examples
 
